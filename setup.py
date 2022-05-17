@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name='deface',
+    name='anonfaces',
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
     author='Martin Drawitsch',
@@ -13,12 +13,12 @@ setuptools.setup(
     description='Video anonymization by face detection',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    url='https://github.com/ORB-HD/deface',
+    url='https://github.com/StealUrKill/anonfaces',
     packages=setuptools.find_packages(),
     entry_points={'console_scripts': [
-        'deface = deface.deface:main',
+        'anonfaces = anonfaces.anonfaces:main',
     ]},
-    package_data={'deface': ['centerface.onnx']},
+    package_data={'anonfaces': ['centerface.onnx']},
     include_package_data=True,
     install_requires=[
         'imageio',

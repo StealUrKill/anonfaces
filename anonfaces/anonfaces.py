@@ -15,8 +15,8 @@ import imageio
 import imageio.plugins.ffmpeg
 import cv2
 
-from deface import __version__
-from deface.centerface import CenterFace
+from anonfaces import __version__
+from anonfaces.centerface import CenterFace
 
 
 # TODO: Optionally preserve audio track?
@@ -241,7 +241,7 @@ def parse_cli_args():
     parser = argparse.ArgumentParser(description='Video anonymization by face detection', add_help=False)
     parser.add_argument(
         'input', nargs='*',
-        help=f'File path(s) or camera device name. It is possible to pass multiple paths by separating them by spaces or by using shell expansion (e.g. `$ deface vids/*.mp4`). Alternatively, you can pass a directory as an input, in which case all files in the directory will be used as inputs. If a camera is installed, a live webcam demo can be started by running `$ deface cam` (which is a shortcut for `$ deface -p \'<video0>\'`.')
+        help=f'File path(s) or camera device name. It is possible to pass multiple paths by separating them by spaces or by using shell expansion (e.g. `$ anonfaces vids/*.mp4`). Alternatively, you can pass a directory as an input, in which case all files in the directory will be used as inputs. If a camera is installed, a live webcam demo can be started by running `$ anonfaces cam` (which is a shortcut for `$ anonfaces -p \'<video0>\'`.')
     parser.add_argument(
         '--output', '-o', default=None, metavar='O',
         help='Output file name. Defaults to input path + postfix "_anonymized".')
@@ -344,7 +344,7 @@ def main():
         is_cam = filetype == 'cam'
         if opath is None and not is_cam:
             root, ext = os.path.splitext(ipath)
-            opath = f'{root}_anonymized{ext}'
+            opath = f'{root}_anon{ext}'
         print(f'Input:  {ipath}\nOutput: {opath}')
         if opath is None and not enable_preview:
             print('No output file is specified and the preview GUI is disabled. No output will be produced.')
