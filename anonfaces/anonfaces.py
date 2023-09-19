@@ -152,10 +152,11 @@ def video_detect(
         #  If fps is not explicitly set in ffmpeg_config, use source video fps value
         _ffmpeg_config.setdefault('fps', meta['fps'])
         _ffmpeg_config.setdefault('ffmpeg_log_level', 'panic')
-        if keep_audio:  # Carry over audio from input path
+        if keep_audio and meta.get('audio_codec'):  # Carry over audio from input path but change audio to libmp3lame
             _ffmpeg_config.setdefault('audio_path', ipath)
             _ffmpeg_config.setdefault('audio_codec', 'libmp3lame')
-        if copy_acodec: #use "copy" codec off by default
+        # Carry over audio from input path, use "copy" codec (no transcoding)
+        if copy_acodec and meta.get('audio_codec'): #use "copy" codec off by default but copies direct audio codec
             _ffmpeg_config.setdefault('audio_path', ipath)
             _ffmpeg_config.setdefault('audio_codec', 'copy')
         writer: imageio.plugins.ffmpeg.FfmpegFormat.Writer = imageio.get_writer(
