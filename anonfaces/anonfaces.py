@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
-import glob
 import json
 import mimetypes
 import os
-import sys
 from typing import Dict, Tuple
 
 import tqdm
@@ -17,9 +15,6 @@ import cv2
 
 from anonfaces import __version__
 from anonfaces.centerface import CenterFace
-
-
-# TODO: Optionally preserve audio track?
 
 
 def scale_bb(x1, y1, x2, y2, mask_scale=1.0):
@@ -38,7 +33,8 @@ def draw_det(
         ellipse: bool = True,
         draw_scores: bool = False,
         ovcolor: Tuple[int] = (0, 0, 0),
-        replaceimg = None
+        replaceimg = None,
+        mosaicsize: int = 20
 ):
     if replacewith == 'solid':
         cv2.rectangle(frame, (x1, y1), (x2, y2), ovcolor, -1)
@@ -63,6 +59,13 @@ def draw_det(
             frame[y1:y2, x1:x2] = resized_replaceimg
         elif replaceimg.shape[2] == 4:  # RGBA
             frame[y1:y2, x1:x2] = frame[y1:y2, x1:x2] * (1 - resized_replaceimg[:, :, 3:] / 255) + resized_replaceimg[:, :, :3] * (resized_replaceimg[:, :, 3:] / 255)
+    elif replacewith == 'mosaic':
+        for y in range(y1, y2, mosaicsize):
+            for x in range(x1, x2, mosaicsize):
+                pt1 = (x, y)
+                pt2 = (min(x2, x + mosaicsize - 1), min(y2, y + mosaicsize - 1))
+                color = (int(frame[y, x][0]), int(frame[y, x][1]), int(frame[y, x][2]))
+                cv2.rectangle(frame, pt1, pt2, color, -1)
     elif replacewith == 'none':
         pass
     if draw_scores:
@@ -74,7 +77,7 @@ def draw_det(
 
 def anonymize_frame(
         dets, frame, mask_scale,
-        replacewith, ellipse, draw_scores, replaceimg
+        replacewith, ellipse, draw_scores, replaceimg, mosaicsize
 ):
     for i, det in enumerate(dets):
         boxes, score = det[:4], det[4]
@@ -89,7 +92,8 @@ def anonymize_frame(
             replacewith=replacewith,
             ellipse=ellipse,
             draw_scores=draw_scores,
-            replaceimg=replaceimg
+            replaceimg=replaceimg,
+            mosaicsize=mosaicsize
         )
 
 
@@ -101,7 +105,7 @@ def cam_read_iter(reader):
 def video_detect(
         ipath: str,
         opath: str,
-        centerface: str,
+        centerface: CenterFace,
         threshold: float,
         enable_preview: bool,
         cam: bool,
@@ -111,10 +115,16 @@ def video_detect(
         ellipse: bool,
         draw_scores: bool,
         ffmpeg_config: Dict[str, str],
-        replaceimg = None
+        replaceimg = None,
+        keep_audio: bool = False,
+        mosaicsize: int = 20,
 ):
     try:
-        reader: imageio.plugins.ffmpeg.FfmpegFormat.Reader = imageio.get_reader(ipath)
+        if 'fps' in ffmpeg_config:
+            reader: imageio.plugins.ffmpeg.FfmpegFormat.Reader = imageio.get_reader(ipath, fps=ffmpeg_config['fps'])
+        else:
+            reader: imageio.plugins.ffmpeg.FfmpegFormat.Reader = imageio.get_reader(ipath)
+
         meta = reader.get_meta_data()
         _ = meta['size']
     except:
@@ -136,8 +146,14 @@ def video_detect(
         bar = tqdm.tqdm(dynamic_ncols=True, total=nframes)
 
     if opath is not None:
+        _ffmpeg_config = ffmpeg_config.copy()
+        #  If fps is not explicitly set in ffmpeg_config, use source video fps value
+        _ffmpeg_config.setdefault('fps', meta['fps'])
+        if keep_audio:  # Carry over audio from input path, use "copy" codec (no transcoding) by default
+            _ffmpeg_config.setdefault('audio_path', ipath)
+            _ffmpeg_config.setdefault('audio_codec', 'copy')
         writer: imageio.plugins.ffmpeg.FfmpegFormat.Writer = imageio.get_writer(
-            opath, format='FFMPEG', mode='I', fps=meta['fps'], **ffmpeg_config
+            opath, format='FFMPEG', mode='I', **_ffmpeg_config
         )
 
     for frame in read_iter:
@@ -147,7 +163,7 @@ def video_detect(
         anonymize_frame(
             dets, frame, mask_scale=mask_scale,
             replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-            replaceimg=replaceimg
+            replaceimg=replaceimg, mosaicsize=mosaicsize
         )
 
         if opath is not None:
@@ -168,14 +184,15 @@ def video_detect(
 def image_detect(
         ipath: str,
         opath: str,
-        centerface: str,
+        centerface: CenterFace,
         threshold: float,
         replacewith: str,
         mask_scale: float,
         ellipse: bool,
         draw_scores: bool,
         enable_preview: bool,
-        replaceimg = None
+        replaceimg = None,
+        mosaicsize: int = 20,
 ):
     frame = imageio.imread(ipath)
 
@@ -185,7 +202,7 @@ def image_detect(
     anonymize_frame(
         dets, frame, mask_scale=mask_scale,
         replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-        replaceimg=replaceimg
+        replaceimg=replaceimg, mosaicsize=mosaicsize
     )
 
     if enable_preview:
@@ -264,11 +281,17 @@ def parse_cli_args():
         '--mask-scale', default=1.3, type=float, metavar='M',
         help='Scale factor for face masks, to make sure that masks cover the complete face. Default: 1.3.')
     parser.add_argument(
-        '--replacewith', default='blur', choices=['blur', 'solid', 'none', 'img'],
-        help='Anonymization filter mode for face regions. "blur" applies a strong gaussian blurring, "solid" draws a solid black box, "none" does leaves the input unchanged and "img" replaces the face with a custom image. Default: "blur".')
+        '--replacewith', default='blur', choices=['blur', 'solid', 'none', 'img', 'mosaic'],
+        help='Anonymization filter mode for face regions. "blur" applies a strong gaussian blurring, "solid" draws a solid black box, "none" does leaves the input unchanged, "img" replaces the face with a custom image and "mosaic" replaces the face with mosaic. Default: "blur".')
     parser.add_argument(
         '--replaceimg', default='replace_img.png',
         help='Anonymization image for face regions. Requires --replacewith img option.')
+    parser.add_argument(
+        '--mosaicsize', default=20, type=int, metavar='width',
+        help='Setting the mosaic size. Requires --replacewith mosaic option. Default: 20.')
+    parser.add_argument(
+        '--keep-audio', '-k', default=False, action='store_true',
+        help='Keep audio from video source file and copy it over to the output (only applies to videos).')
     parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
         help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.'
@@ -276,6 +299,9 @@ def parse_cli_args():
     parser.add_argument(
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
+    parser.add_argument(
+        '--execution-provider', '--ep', default=None, metavar='EP',
+        help='Override onnxrt execution provider (see https://onnxruntime.ai/docs/execution-providers/). If not specified, the presumably fastest available one will be automatically selected. Only used if backend is onnxrt.')
     parser.add_argument(
         '--version', action='version', version=__version__,
         help='Print version number and exit.')
@@ -316,9 +342,12 @@ def main():
     threshold = args.thresh
     ellipse = not args.boxes
     mask_scale = args.mask_scale
+    keep_audio = args.keep_audio
     ffmpeg_config = args.ffmpeg_config
     backend = args.backend
     in_shape = args.scale
+    execution_provider = args.execution_provider
+    mosaicsize = args.mosaicsize
     replaceimg = None
     if in_shape is not None:
         w, h = in_shape.split('x')
@@ -329,7 +358,7 @@ def main():
 
 
     # TODO: scalar downscaling setting (-> in_shape), preserving aspect ratio
-    centerface = CenterFace(in_shape=in_shape, backend=backend)
+    centerface = CenterFace(in_shape=in_shape, backend=backend, override_execution_provider=execution_provider)
 
     multi_file = len(ipaths) > 1
     if multi_file:
@@ -361,8 +390,10 @@ def main():
                 draw_scores=draw_scores,
                 enable_preview=enable_preview,
                 nested=multi_file,
+                keep_audio=keep_audio,
                 ffmpeg_config=ffmpeg_config,
-                replaceimg=replaceimg
+                replaceimg=replaceimg,
+                mosaicsize=mosaicsize
             )
         elif filetype == 'image':
             image_detect(
@@ -375,7 +406,8 @@ def main():
                 ellipse=ellipse,
                 draw_scores=draw_scores,
                 enable_preview=enable_preview,
-                replaceimg=replaceimg
+                replaceimg=replaceimg,
+                mosaicsize=mosaicsize
             )
         elif filetype is None:
             print(f'Can\'t determine file type of file {ipath}. Skipping...')

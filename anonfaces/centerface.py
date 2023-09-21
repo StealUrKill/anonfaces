@@ -1,5 +1,6 @@
-import datetime
 import os
+
+from functools import lru_cache
 
 import numpy as np
 import cv2
@@ -9,8 +10,17 @@ import cv2
 default_onnx_path = f'{os.path.dirname(__file__)}/centerface.onnx'
 
 
+def ensure_rgb(img: np.ndarray) -> np.ndarray:
+    """Convert input image to RGB if it is in RGBA or L format"""
+    if img.ndim == 2:  # 1-channel grayscale -> RGB
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    elif img.shape[2] == 4:  # 4-channel RGBA -> RGB
+        img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+    return img
+
+
 class CenterFace:
-    def __init__(self, onnx_path=None, in_shape=None, backend='auto'):
+    def __init__(self, onnx_path=None, in_shape=None, backend='auto', override_execution_provider=None):
         self.in_shape = in_shape
         self.onnx_input_name = 'input.1'
         self.onnx_output_names = ['537', '538', '539', '540']
@@ -41,11 +51,24 @@ class CenterFace:
 
             static_model = onnx.load(onnx_path)
             dyn_model = self.dynamicize_shapes(static_model)
-            self.sess = onnxruntime.InferenceSession(dyn_model.SerializeToString(), providers=['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider'])
+
+            # onnxruntime.get_available_providers() Returns a list of all
+            #  available providers in a reasonable ordering (GPU providers
+            #  first, then accelerated CPU providers like OpenVINO, then
+            #  CPUExecutionProvider as the last choice).
+            #  In normal conditions, overriding this choice won't be necessary.
+            available_providers = onnxruntime.get_available_providers()
+            if override_execution_provider is None:
+                ort_providers = available_providers
+            else:
+                if override_execution_provider not in available_providers:
+                    raise ValueError(f'{override_execution_provider=} not found. Available providers are: {available_providers}')
+                ort_providers = [override_execution_provider]
+
+            self.sess = onnxruntime.InferenceSession(dyn_model.SerializeToString(), providers=ort_providers)
 
             preferred_provider = self.sess.get_providers()[0]
-            preferred_device = 'GPU' if preferred_provider.startswith('CUDA') else 'CPU'
-            # print(f'Running on {preferred_device}.')
+            print(f'Running on {preferred_provider}.')
 
     @staticmethod
     def dynamicize_shapes(static_model):
@@ -71,14 +94,14 @@ class CenterFace:
         return dyn_model
 
     def __call__(self, img, threshold=0.5):
-        self.orig_shape = img.shape[:2]
-        if self.in_shape is None:
-            self.in_shape = self.orig_shape[::-1]
-        if not hasattr(self, 'h_new'):  # First call, need to compute sizes
-            self.w_new, self.h_new, self.scale_w, self.scale_h = self.transform(self.in_shape)
+        img = ensure_rgb(img)
+        orig_shape = img.shape[:2]
+        in_shape = orig_shape[::-1] if self.in_shape is None else self.in_shape
+        # Compute sizes
+        w_new, h_new, scale_w, scale_h = self.shape_transform(in_shape, orig_shape)
 
         blob = cv2.dnn.blobFromImage(
-            img, scalefactor=1.0, size=(self.w_new, self.h_new),
+            img, scalefactor=1.0, size=(w_new, h_new),
             mean=(0, 0, 0), swapRB=False, crop=False
         )
         if self.backend == 'opencv':
@@ -88,18 +111,20 @@ class CenterFace:
             heatmap, scale, offset, lms = self.sess.run(self.onnx_output_names, {self.onnx_input_name: blob})
         else:
             raise RuntimeError(f'Unknown backend {self.backend}')
-        dets, lms = self.decode(heatmap, scale, offset, lms, (self.h_new, self.w_new), threshold=threshold)
+        dets, lms = self.decode(heatmap, scale, offset, lms, (h_new, w_new), threshold=threshold)
         if len(dets) > 0:
-            dets[:, 0:4:2], dets[:, 1:4:2] = dets[:, 0:4:2] / self.scale_w, dets[:, 1:4:2] / self.scale_h
-            lms[:, 0:10:2], lms[:, 1:10:2] = lms[:, 0:10:2] / self.scale_w, lms[:, 1:10:2] / self.scale_h
+            dets[:, 0:4:2], dets[:, 1:4:2] = dets[:, 0:4:2] / scale_w, dets[:, 1:4:2] / scale_h
+            lms[:, 0:10:2], lms[:, 1:10:2] = lms[:, 0:10:2] / scale_w, lms[:, 1:10:2] / scale_h
         else:
             dets = np.empty(shape=[0, 5], dtype=np.float32)
             lms = np.empty(shape=[0, 10], dtype=np.float32)
 
         return dets, lms
 
-    def transform(self, in_shape):
-        h_orig, w_orig = self.orig_shape
+    @staticmethod
+    @lru_cache(maxsize=128)
+    def shape_transform(in_shape, orig_shape):
+        h_orig, w_orig = orig_shape
         w_new, h_new = in_shape
         # Make spatial dims divisible by 32
         w_new, h_new = int(np.ceil(w_new / 32) * 32), int(np.ceil(h_new / 32) * 32)
