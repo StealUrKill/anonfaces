@@ -1,3 +1,2 @@
-include versioneer.py
 include anonfaces/_version.py
 include anonfaces/centerface.onnx

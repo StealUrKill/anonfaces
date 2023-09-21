@@ -1,13 +1,11 @@
 import setuptools
-import versioneer
 
 with open('README.md', 'r') as fh:
     long_description = fh.read()
 
 setuptools.setup(
     name='anonfaces',
-    version=versioneer.get_version(),
-    cmdclass=versioneer.get_cmdclass(),
+    version='1.0.1',
     author='Martin Drawitsch',
     author_email='martin.drawitsch@gmail.com',
     description='Video anonymization by face detection',

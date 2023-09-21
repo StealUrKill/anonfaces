@@ -3,7 +3,7 @@ requires = ["setuptools>=67.6", "wheel", "setuptools-scm[toml]>=7.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "deface"
+name = "anonfaces"
 requires-python = ">=3.8"
 description = "Video anonymization by face detection"
 readme = "README.md"
@@ -31,19 +31,19 @@ directml = ["onnx", "onnxruntime-directml"]
 openvino = ["onnx", "onnxruntime-openvino"]
 
 [project.scripts]
-deface = "deface.deface:main"
+anonfaces = "anonfaces.anonfaces:main"
 
 [tool.setuptools]
-packages = ["deface"]
+packages = ["anonfaces"]
 
 [tool.setuptools.package-data]
-deface = ["centerface.onnx"]
+anonfaces = ["centerface.onnx"]
 
 [tool.setuptools_scm]
-write_to = "deface/_version.py"
+write_to = "anonfaces/_version.py"
 
 [tool.ruff]
 line-length = 120
 
 [project.urls]
-repository = "https://github.com/ORB-HD/deface"
+repository = "https://github.com/StealUrKill/anonfaces"
