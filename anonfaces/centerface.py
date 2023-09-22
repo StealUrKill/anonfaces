@@ -69,7 +69,8 @@ class CenterFace:
 
             preferred_provider = self.sess.get_providers()[0]
             print(f'Running on {preferred_provider}.')
-
+            print()
+            
     @staticmethod
     def dynamicize_shapes(static_model):
         from onnx.tools.update_model_dims import update_inputs_outputs_dims

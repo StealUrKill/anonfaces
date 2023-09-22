@@ -4,7 +4,7 @@
 
 `anonfaces` is a simple command-line tool for automatic anonymization of faces in videos or photos.
 It works by first detecting all human faces in each video frame and then applying an anonymization filter (blurring or black boxes) on each detected face region.
-By default all audio tracks are discarded as well.
+By default all audio tracks are removed, if kept they are encoded as mp3 (libmp3lame), unless specified as --copy-acodec to copy codecs.
 
 
 Original frame | `anonfaces` output (using default options)
@@ -16,13 +16,13 @@ Original frame | `anonfaces` output (using default options)
 
 `anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. There are currently no plans of creating a graphical user interface.
 
-The recommended way of installing `anonfaces` is via the `pip` package manager. This requires that you have Python 3.6 or later installed on your system. It is recommended to set up and activate a new [virtual environment](https://realpython.com/python-virtual-environments-a-primer/) first. Then you can install the latest release of `anonfaces` and all necessary dependencies by running:
+The recommended way of installing `anonfaces` is via the `pip` package manager (But PYPI has not been updated with the newest changes mentioned here). This requires that you have Python 3.6 or later installed on your system. It is recommended to set up and activate a new [virtual environment](https://realpython.com/python-virtual-environments-a-primer/) first. Then you can install the latest release of `anonfaces` and all necessary dependencies by running:
 
-    $ python3 -m pip install anonfaces
+    python -m pip install anonfaces
 
 Alternatively, if you want to use the latest (unreleased) revision directly from GitHub, you can run:
 
-    $ python3 -m pip install 'git+https://github.com/StealUrKill/anonfaces'
+    python -m pip install "git+https://github.com/StealUrKill/anonfaces"
 
 This will only install the dependencies that are strictly required for running the tool. If you want to speed up processing by enabling hardware acceleration, you will need to manually install additional packages, see [Hardware acceleration](#hardware-acceleration)
 
@@ -33,7 +33,7 @@ This will only install the dependencies that are strictly required for running t
 
 If you want to try out anonymizing a video using the default settings, you just need to supply the path to it. For example, if the path to your test video is `myvideos/vid1.mp4`, run:
 
-    $ anonfaces myvideos/vid1.mp4
+    anonfaces myvideos/vid1.mp4
 
 This will write the the output to the new video file `myvideos/vid1_anonymized.mp4`.
 
@@ -41,7 +41,7 @@ This will write the the output to the new video file `myvideos/vid1_anonymized.m
 
 If you have a camera (webcam) attached to your computer, you can run `anonfaces` on the live video input by calling it with the `cam` argument instead of an input path:
 
-    $ anonfaces cam
+    anonfaces cam
 
 This is a shortcut for `$ anonfaces --preview '<video0>'`, where `'<video0>'` (literal) is a  camera device identifier. If you have multiple cameras installed, you can try `'<videoN>'`, where `N` is the index of the camera (see [imageio-ffmpeg docs](https://imageio.readthedocs.io/en/stable/format_ffmpeg.html)).
 
@@ -49,7 +49,7 @@ This is a shortcut for `$ anonfaces --preview '<video0>'`, where `'<video0>'` (l
 
 To get an overview of usage and available options, run:
 
-    $ anonfaces -h
+    anonfaces -h
 
 The output may vary depending on your installed version, but it should look similar to this:
 
@@ -76,7 +76,7 @@ positional arguments:
 
 optional arguments:
   --output O, -o O      Output file name. Defaults to input path + postfix
-                        "_anonymized".
+                        "_anon".
   --thresh T, -t T      Detection threshold (tune this to trade off between
                         false positive and false negative rate). Default: 0.2.
   --scale WxH, -s WxH   Downscale images for network inference to this size
@@ -100,6 +100,8 @@ optional arguments:
                         option. Default: 20.
   --keep-audio, -k      Keep audio from video source file and copy it over to
                         the output (only applies to videos).
+  --copy-acodec', '-ca', default=False, action='store_true',
+						help='Keep audio codec from video source file.')
   --ffmpeg-config FFMPEG_CONFIG
                         FFMPEG config arguments for encoding output videos.
                         This argument is expected in JSON notation. For a list
@@ -126,7 +128,7 @@ In most use cases the default configuration should be sufficient, but depending 
 
 By default, each detected face is anonymized by applying a blur filter to an ellipse region that covers the face. If you prefer to anonymize faces by drawing black boxes on top of them, you can achieve this through the `--boxes` and `--replacewith` options:
 
-    $ anonfaces examples/city.jpg --boxes --replacewith solid -o examples/city_anonymized_boxes.jpg
+    anonfaces examples/city.jpg --boxes --replacewith solid -o examples/city_anonymized_boxes.jpg
 
 <img src="examples/city_anonymized_boxes.jpg" width="70%" alt="$ anonfaces examples/city.jpg --enable-boxes --replacewith solid -o examples/city_anonymized_boxes.jpg"/>
 
@@ -136,7 +138,7 @@ Another common anonymization option is to draw a mosaic pattern over faces. This
 
 Usage example:
 
-    $ anonfaces examples/city.jpg --replacewith mosaic --mosaicsize 20 -o examples/city_anonymized_mosaic.jpg
+    anonfaces examples/city.jpg --replacewith mosaic --mosaicsize 20 -o examples/city_anonymized_mosaic.jpg
 
 <img src="examples/city_anonymized_mosaic.jpg" width="70%" alt="$ anonfaces examples/city.jpg --replacewith mosaic --mosaicsize 20 -o examples/city_anonymized_mosaic.jpg"/>
 
@@ -162,7 +164,7 @@ To demonstrate the effects of a threshold that is set too low or too high, see t
 
 If you are interested in seeing the faceness score (a score between 0 and 1 that roughly corresponds to the detector's confidence that something *is* a face) of each detected face in the input, you can enable the `--draw-scores` option to draw the score of each detection directly above its location.
 
-    $ anonfaces examples/city.jpg --draw-scores -o examples/city_anonymized_scores.jpg
+    anonfaces examples/city.jpg --draw-scores -o examples/city_anonymized_scores.jpg
 
 <img src="examples/city_anonymized_scores.jpg" width="70%" alt="$ anonfaces examples/city.jpg --draw-scores -o examples/city_anonymized_scores.jpg"/>
 
@@ -192,7 +194,7 @@ Here are some recommendations for common setups:
 
 If you have a CUDA-capable GPU, you can enable GPU acceleration by installing the relevant packages:
 
-    $ python3 -m pip install onnx onnxruntime-gpu
+    python -m pip install onnx onnxruntime-gpu
 
 If the `onnxruntime-gpu` package is found and a GPU is available, the face detection network is automatically offloaded to the GPU.
 This can significantly improve the overall processing speed.
@@ -201,13 +203,13 @@ This can significantly improve the overall processing speed.
 
 Windows users with capable non-Nvidia GPUs can enable GPU-accelerated inference with DirectML by installing:
 
-    $ python3 -m pip install onnx onnxruntime-directml
+    python -m pip install onnx onnxruntime-directml
 
 ### OpenVINO
 
 OpenVINO can accelerate inference even on CPU-only systems by a few percent, compared to the default OpenCV and ONNX Runtime implementations. It works on Linux and Windows, but not yet on Python 3.11 as of July 2023. Install the backend with:
 
-    $ python3 -m pip install onnx onnxruntime-openvino
+    python -m pip install onnx onnxruntime-openvino
 
 
 ### Other platforms

@@ -10,6 +10,7 @@ import tqdm
 import skimage.draw
 import numpy as np
 import imageio
+import imageio_ffmpeg as ffmpeg
 import imageio.plugins.ffmpeg
 import cv2
 
@@ -117,6 +118,7 @@ def video_detect(
         ffmpeg_config: Dict[str, str],
         replaceimg = None,
         keep_audio: bool = False,
+        copy_acodec: bool = False,
         mosaicsize: int = 20,
 ):
     try:
@@ -149,13 +151,19 @@ def video_detect(
         _ffmpeg_config = ffmpeg_config.copy()
         #  If fps is not explicitly set in ffmpeg_config, use source video fps value
         _ffmpeg_config.setdefault('fps', meta['fps'])
-        if keep_audio:  # Carry over audio from input path, use "copy" codec (no transcoding) by default
+        _ffmpeg_config.setdefault('ffmpeg_log_level', 'panic')
+        if keep_audio:  # Carry over audio from input path
+            _ffmpeg_config.setdefault('audio_path', ipath)
+            _ffmpeg_config.setdefault('audio_codec', 'libmp3lame')
+        if copy_acodec: #use "copy" codec off by default
             _ffmpeg_config.setdefault('audio_path', ipath)
             _ffmpeg_config.setdefault('audio_codec', 'copy')
         writer: imageio.plugins.ffmpeg.FfmpegFormat.Writer = imageio.get_writer(
             opath, format='FFMPEG', mode='I', **_ffmpeg_config
         )
-
+                
+        # Uncomment to check full ffmpeg command    print(f'FFMPEG COMMAND: {_ffmpeg_config}')
+        
     for frame in read_iter:
         # Perform network inference, get bb dets but discard landmark predictions
         dets, _ = centerface(frame, threshold=threshold)
@@ -293,6 +301,9 @@ def parse_cli_args():
         '--keep-audio', '-k', default=False, action='store_true',
         help='Keep audio from video source file and copy it over to the output (only applies to videos).')
     parser.add_argument(
+        '--copy-acodec', '-ca', default=False, action='store_true',
+        help='Keep audio codec from video source file.')
+    parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
         help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.'
     )  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
@@ -343,6 +354,7 @@ def main():
     ellipse = not args.boxes
     mask_scale = args.mask_scale
     keep_audio = args.keep_audio
+    copy_acodec = args.copy_acodec
     ffmpeg_config = args.ffmpeg_config
     backend = args.backend
     in_shape = args.scale
@@ -375,6 +387,7 @@ def main():
             root, ext = os.path.splitext(ipath)
             opath = f'{root}_anon{ext}'
         print(f'Input:  {ipath}\nOutput: {opath}')
+        print()
         if opath is None and not enable_preview:
             print('No output file is specified and the preview GUI is disabled. No output will be produced.')
         if filetype == 'video' or is_cam:
@@ -391,6 +404,7 @@ def main():
                 enable_preview=enable_preview,
                 nested=multi_file,
                 keep_audio=keep_audio,
+                copy_acodec=copy_acodec,
                 ffmpeg_config=ffmpeg_config,
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize

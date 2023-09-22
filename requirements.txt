@@ -4,3 +4,6 @@ numpy
 tqdm
 scikit-image
 opencv-python
+tf2onnx
+onnx
+onnxruntime-gpu
