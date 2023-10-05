@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='anonfaces',
-    version='1.0.2',
+    version='1.0.3',
     author='Martin Drawitsch',
     author_email='martin.drawitsch@gmail.com',
     description='Video anonymization by face detection',
@@ -28,6 +28,8 @@ setuptools.setup(
     ],
     extras_require={
         'gpu':  ['onnxruntime-gpu'],
+        'Audio_Distortion':  ['pedalboard'],
+        'Audio_Splicing':   ['moviepy'],
     },
     classifiers=[
         'Programming Language :: Python :: 3',

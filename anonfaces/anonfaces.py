@@ -5,7 +5,7 @@ import json
 import mimetypes
 import os
 from typing import Dict, Tuple
-
+import shutil
 import tqdm
 import skimage.draw
 import numpy as np
@@ -13,6 +13,9 @@ import imageio
 import imageio_ffmpeg as ffmpeg
 import imageio.plugins.ffmpeg
 import cv2
+from moviepy.editor import *
+from pedalboard import *
+from pedalboard.io import AudioFile
 
 from anonfaces import __version__
 from anonfaces.centerface import CenterFace
@@ -190,6 +193,57 @@ def video_detect(
     bar.close()
 
 
+EXTRACTED_AUDIO = "extracted_audio.wav"
+DISTORTED_AUDIO = "distorted_audio.wav"
+
+
+def extract_audio_from_video(v_path: str, a_path: str):
+    video = VideoFileClip(v_path)
+    video.audio.write_audiofile(a_path)
+
+def distort_audio(audio_input: str, audio_output: str, sample_rate: float = 44100.0):
+    with AudioFile(audio_input).resampled_to(sample_rate) as f:
+        audio = f.read(f.frames)
+
+    board = Pedalboard([
+        Gain(gain_db=5),
+        PitchShift(semitones=-2.5),
+    ])
+    d_audio = board(audio, sample_rate)
+
+    with AudioFile(audio_output, 'w', sample_rate, d_audio.shape[0]) as f:
+        f.write(d_audio)
+
+def combine_video_audio(v_path: str, a_path: str, o_path: str):
+    vclip = VideoFileClip(v_path)
+    aclip = AudioFileClip(a_path)
+
+    vclip.audio = aclip
+    vclip.write_videofile(o_path, codec="libx264")
+    
+def distort_now(ipath, opath):
+
+    # Add "_distorted" to the output file name
+    root, ext = os.path.splitext(opath)
+    dopath = f"{root}_distorted{ext}"
+
+    # Copy opath to dopath
+    shutil.copy(opath, dopath)
+
+    # Extract audio from the original video
+    extract_audio_from_video(ipath, EXTRACTED_AUDIO)
+
+    # Distort the extracted audio
+    distort_audio(EXTRACTED_AUDIO, DISTORTED_AUDIO)
+
+    # Combine the processed audio with the original video
+    combine_video_audio(opath, DISTORTED_AUDIO, dopath)
+    
+    # Remove temporary audio files
+    os.remove(EXTRACTED_AUDIO)
+    os.remove(DISTORTED_AUDIO)
+    
+
 def image_detect(
         ipath: str,
         opath: str,
@@ -298,6 +352,9 @@ def parse_cli_args():
     parser.add_argument(
         '--mosaicsize', default=20, type=int, metavar='width',
         help='Setting the mosaic size. Requires --replacewith mosaic option. Default: 20.')
+    parser.add_argument(
+        '--distort-audio', default=False, action='store_true',
+        help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio).')
     parser.add_argument(
         '--keep-audio', '-k', default=False, action='store_true',
         help='Keep audio from video source file and copy it over to the output (only applies to videos).')
@@ -410,6 +467,12 @@ def main():
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize
             )
+            # Check if args.distort_audio is allowed
+            if args.keep_audio and args.distort_audio:
+                print("Distorting audio for the video...")
+                distort_now(ipath, opath)
+            else:
+                print("Skipping audio distortion.")
         elif filetype == 'image':
             image_detect(
                 ipath=ipath,

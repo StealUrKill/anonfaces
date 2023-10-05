@@ -98,10 +98,11 @@ optional arguments:
                         --replacewith img option.
   --mosaicsize width    Setting the mosaic size. Requires --replacewith mosaic
                         option. Default: 20.
+  --distort-audio		Enable audio distortion for the output video.
+						Applies pitch shift and gain effects to the audio.
   --keep-audio, -k      Keep audio from video source file and copy it over to
                         the output (only applies to videos).
-  --copy-acodec', '-ca', default=False, action='store_true',
-						help='Keep audio codec from video source file.')
+  --copy-acodec, -ca	Keep the audio codec from video source file.
   --ffmpeg-config FFMPEG_CONFIG
                         FFMPEG config arguments for encoding output videos.
                         This argument is expected in JSON notation. For a list
