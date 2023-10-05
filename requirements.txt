@@ -8,4 +8,4 @@ tf2onnx
 onnx
 onnxruntime-gpu
 moviepy>=1.0.3
-pedalboard>=.8.2
+pedalboard>=0.8.2

@@ -24,7 +24,7 @@ dependencies = [
     "scikit-image",
     "opencv-python",
 	"moviepy>=1.0.3",
-	"pedalboard>=.8.2",
+	"pedalboard>=0.8.2",
 ]
 
 [project.optional-dependencies]

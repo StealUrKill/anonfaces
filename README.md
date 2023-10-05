@@ -98,8 +98,8 @@ optional arguments:
                         --replacewith img option.
   --mosaicsize width    Setting the mosaic size. Requires --replacewith mosaic
                         option. Default: 20.
-  --distort-audio		Enable audio distortion for the output video.
-						Applies pitch shift and gain effects to the audio.
+  --distort-audio       Enable audio distortion for the output video.
+                        Applies pitch shift and gain effects to the audio.
   --keep-audio, -k      Keep audio from video source file and copy it over to
                         the output (only applies to videos).
   --copy-acodec, -ca	Keep the audio codec from video source file.
