@@ -10,6 +10,7 @@ import tqdm
 import skimage.draw
 import numpy as np
 import imageio
+import imageio.v2 as iio
 import imageio_ffmpeg as ffmpeg
 import imageio.plugins.ffmpeg
 import cv2
@@ -168,6 +169,7 @@ def video_detect(
                 
         # Uncomment to check full ffmpeg command    print(f'FFMPEG COMMAND: {_ffmpeg_config}')
         
+
     for frame in read_iter:
         # Perform network inference, get bb dets but discard landmark predictions
         dets, _ = centerface(frame, threshold=threshold)
@@ -254,10 +256,16 @@ def image_detect(
         ellipse: bool,
         draw_scores: bool,
         enable_preview: bool,
+        keep_metadata: bool,
         replaceimg = None,
         mosaicsize: int = 20,
 ):
     frame = imageio.imread(ipath)
+    
+    if keep_metadata:
+        # Source image EXIF metadata retrieval via imageio V3 lib
+        metadata = imageio.v3.immeta(ipath)
+        exif_dict = metadata.get("exif", None)
 
     # Perform network inference, get bb dets but discard landmark predictions
     dets, _ = centerface(frame, threshold=threshold)
@@ -274,6 +282,11 @@ def image_detect(
             cv2.destroyAllWindows()
 
     imageio.imsave(opath, frame)
+
+    if keep_metadata:
+        # Save image with EXIF metadata
+        imageio.imsave(opath, frame, exif=exif_dict)
+
     # print(f'Output saved to {opath}')
 
 
@@ -374,6 +387,9 @@ def parse_cli_args():
     parser.add_argument(
         '--version', action='version', version=__version__,
         help='Print version number and exit.')
+    parser.add_argument(
+        '--keep-metadata', '-m', default=False, action='store_true',
+        help='Keep metadata of the original image. Default : False.')
     parser.add_argument('--help', '-h', action='help', help='Show this help message and exit.')
 
     args = parser.parse_args()
@@ -418,6 +434,7 @@ def main():
     in_shape = args.scale
     execution_provider = args.execution_provider
     mosaicsize = args.mosaicsize
+    keep_metadata = args.keep_metadata
     replaceimg = None
     if in_shape is not None:
         w, h = in_shape.split('x')
@@ -484,6 +501,7 @@ def main():
                 ellipse=ellipse,
                 draw_scores=draw_scores,
                 enable_preview=enable_preview,
+                keep_metadata=keep_metadata,
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize
             )
