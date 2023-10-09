@@ -117,6 +117,7 @@ optional arguments:
                         not specified, the presumably fastest available one
                         will be automatically selected. Only used if backend is
                         onnxrt.
+  --keep-metadata, -m   Keeps the original image metadata in place after blurring.
   --version             Print version number and exit.
   --help, -h            Show this help message and exit.
 ```
