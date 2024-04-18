@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='anonfaces',
-    version='1.0.3',
+    version='1.0.4',
     author='Martin Drawitsch',
     author_email='martin.drawitsch@gmail.com',
     description='Video anonymization by face detection',
@@ -25,6 +25,8 @@ setuptools.setup(
         'tqdm',
         'scikit-image',
         'opencv-python',
+        'onnxruntime',
+        'onnx',
     ],
     extras_require={
         'gpu':  ['onnxruntime-gpu'],

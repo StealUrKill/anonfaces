@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anonfaces"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 description = "Video anonymization by face detection"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -23,8 +23,10 @@ dependencies = [
     "tqdm",
     "scikit-image",
     "opencv-python",
-	"moviepy>=1.0.3",
-	"pedalboard>=0.8.2",
+    "moviepy>=1.0.3",
+    "pedalboard>=0.8.2",
+    "onnxruntime",
+    "onnx",
 ]
 
 [project.optional-dependencies]
