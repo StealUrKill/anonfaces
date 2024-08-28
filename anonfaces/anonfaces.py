@@ -409,6 +409,15 @@ def parse_cli_args():
 def main():
     args = parse_cli_args()
     ipaths = []
+    
+    # SET CPU AS DEFAULT
+    if not args.execution_provider:
+        args.execution_provider = 'CPUExecutionProvider'
+
+    # Conditionally add OpenVINO libraries to the path
+    if 'openvino' in args.execution_provider.lower():
+        import onnxruntime.tools.add_openvino_win_libs as utils
+        utils.add_openvino_libs_to_path()
 
     # add files in folders
     for path in args.input:

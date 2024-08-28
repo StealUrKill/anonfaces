@@ -1,6 +1,5 @@
-[![PyPI](https://img.shields.io/pypi/v/anonfaces)](https://pypi.org/project/anonfaces/)
 
-# `anonfaces`: Video anonymization by face detection
+# `anonfaces`: Video anonymization by face detection Release Candidate Branch
 
 `anonfaces` is a simple command-line tool for automatic anonymization of faces in videos or photos.
 It works by first detecting all human faces in each video frame and then applying an anonymization filter (blurring or black boxes) on each detected face region.
@@ -16,15 +15,21 @@ Original frame | `anonfaces` output (using default options)
 
 `anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. There are currently no plans of creating a graphical user interface.
 
-The recommended way of installing `anonfaces` is via the `pip` package manager (But PYPI has not been updated with the newest changes mentioned here). This requires that you have Python 3.6 or later installed on your system. It is recommended to set up and activate a new [virtual environment](https://realpython.com/python-virtual-environments-a-primer/) first. Then you can install the latest release of `anonfaces` and all necessary dependencies by running:
+Release Candidate only supports this revision directly from GitHub, from which you can run:
 
-    python -m pip install anonfaces
-
-Alternatively, if you want to use the latest (unreleased) revision directly from GitHub, you can run:
-
-    python -m pip install "git+https://github.com/StealUrKill/anonfaces"
+    python -m pip install "git+https://github.com/StealUrKill/anonfaces/tree/RC"
 
 This will only install the dependencies that are strictly required for running the tool. If you want to speed up processing by enabling hardware acceleration, you will need to manually install additional packages, see [Hardware acceleration](#hardware-acceleration)
+
+#### `If you want to run anonfaces with options that are preconfigured in the project file`
+#### `Use add_remove_helper.py to find GitHub branches with execution provider options.`
+#### `This also includes a removal tool of all the pip packages that this installs`
+	
+	python -c "import requests; exec(requests.get('https://raw.githubusercontent.com/StealUrKill/anonfaces/RC/add_remove_helper.py').text)"
+
+#### `This one liner does require requests to be installed`
+	
+	python -m pip install requests
 
 
 ## Usage

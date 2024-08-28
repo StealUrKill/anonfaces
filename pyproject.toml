@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anonfaces"
-requires-python = ">=3.11"
+version = "1.0.5RC"
+requires-python = "==3.11.*"
 description = "Video anonymization by face detection"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -14,25 +15,24 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
-dynamic = ["version"]
 
 dependencies = [
     "imageio>=2.25",
     "imageio-ffmpeg>=0.4.6",
-    "numpy",
+    "numpy==1.26.4",
     "tqdm",
     "scikit-image",
     "opencv-python",
     "moviepy>=1.0.3",
     "pedalboard>=0.8.2",
-    "onnxruntime",
-    "onnx",
+    "onnx==1.16.2",
 ]
 
 [project.optional-dependencies]
-cuda = ["onnx", "onnxruntime-cuda"]
-directml = ["onnx", "onnxruntime-directml"]
-openvino = ["onnx", "onnxruntime-openvino"]
+standard = ["onnxruntime==1.19.0"]
+cuda = ["onnxruntime-gpu==1.18.1"]
+directml = ["onnxruntime-directml==1.19.0"]
+openvino = ["onnxruntime-openvino==1.18.0", "openvino==2024.1.0"]
 
 [project.scripts]
 anonfaces = "anonfaces.anonfaces:main"
@@ -50,4 +50,4 @@ write_to = "anonfaces/_version.py"
 line-length = 120
 
 [project.urls]
-repository = "https://github.com/StealUrKill/anonfaces"
+repository = "https://github.com/StealUrKill/anonfaces/tree/RC"
