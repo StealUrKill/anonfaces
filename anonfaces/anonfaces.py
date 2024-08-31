@@ -14,12 +14,29 @@ import imageio.v2 as iio
 import imageio_ffmpeg as ffmpeg
 import imageio.plugins.ffmpeg
 import cv2
+import sys
+import signal
 from moviepy.editor import *
 from pedalboard import *
 from pedalboard.io import AudioFile
-
+from tqdm import tqdm
 from anonfaces import __version__
 from anonfaces.centerface import CenterFace
+
+
+# Sends a signal to stop ffmpeg
+stop_ffmpeg = False
+
+
+def signal_handler(signum, frame):
+    global stop_ffmpeg
+    stop_ffmpeg = True
+    tqdm.write(f"")
+    tqdm.write("Stop signal received, stopping cleanly...")
+    tqdm.write(f"")
+
+
+signal.signal(signal.SIGINT, signal_handler)
 
 
 def scale_bb(x1, y1, x2, y2, mask_scale=1.0):
@@ -135,9 +152,9 @@ def video_detect(
         _ = meta['size']
     except:
         if cam:
-            print(f'Could not find video device {ipath}. Please set a valid input.')
+            tqdm.write(f'Could not find video device {ipath}. Please set a valid input.')
         else:
-            print(f'Could not open file {ipath} as a video file with imageio. Skipping file...')
+            tqdm.write(f'Could not open file {ipath} as a video file with imageio. Skipping file...')
         return
 
     if cam:
@@ -147,9 +164,9 @@ def video_detect(
         read_iter = reader.iter_data()
         nframes = reader.count_frames()
     if nested:
-        bar = tqdm.tqdm(dynamic_ncols=True, total=nframes, position=1, leave=True)
+        bar = tqdm(dynamic_ncols=True, total=nframes, position=1, leave=True)
     else:
-        bar = tqdm.tqdm(dynamic_ncols=True, total=nframes)
+        bar = tqdm(dynamic_ncols=True, total=nframes)
 
     if opath is not None:
         _ffmpeg_config = ffmpeg_config.copy()
@@ -167,10 +184,14 @@ def video_detect(
             opath, format='FFMPEG', mode='I', **_ffmpeg_config
         )
                 
-        # Uncomment to check full ffmpeg command    print(f'FFMPEG COMMAND: {_ffmpeg_config}')
+        # Uncomment to check full ffmpeg command    tqdm.write(f'FFMPEG COMMAND: {_ffmpeg_config}')
         
 
     for frame in read_iter:
+        #signal flag during ffmpeg video_detect
+        if stop_ffmpeg:
+            return
+        
         # Perform network inference, get bb dets but discard landmark predictions
         dets, _ = centerface(frame, threshold=threshold)
 
@@ -282,12 +303,12 @@ def image_detect(
             cv2.destroyAllWindows()
 
     imageio.imsave(opath, frame)
-
+    
     if keep_metadata:
         # Save image with EXIF metadata
         imageio.imsave(opath, frame, exif=exif_dict)
 
-    # print(f'Output saved to {opath}')
+    tqdm.write(f'Output saved to {opath}')
 
 
 def get_file_type(path):
@@ -396,7 +417,7 @@ def parse_cli_args():
 
     if len(args.input) == 0:
         parser.print_help()
-        print('\nPlease supply at least one input path.')
+        tqdm.write('\nPlease supply at least one input path.')
         exit(1)
 
     if args.input == ['cam']:  # Shortcut for webcam demo with live preview
@@ -449,9 +470,11 @@ def main():
 
     multi_file = len(ipaths) > 1
     if multi_file:
-        ipaths = tqdm.tqdm(ipaths, position=0, dynamic_ncols=True, desc='Batch progress')
+        ipaths = tqdm(ipaths, position=0, dynamic_ncols=True, desc='Batch progress')
 
     for ipath in ipaths:
+        if stop_ffmpeg:
+            break  # exit the loop immediately if signal is received
         opath = base_opath
         if ipath == 'cam':
             ipath = '<video0>'
@@ -461,10 +484,10 @@ def main():
         if opath is None and not is_cam:
             root, ext = os.path.splitext(ipath)
             opath = f'{root}_anon{ext}'
-        print(f'Input:  {ipath}\nOutput: {opath}')
+        tqdm.write(f'Input:  {ipath}\nOutput: {opath}')
         print()
         if opath is None and not enable_preview:
-            print('No output file is specified and the preview GUI is disabled. No output will be produced.')
+            tqdm.write('No output file is specified and the preview GUI is disabled. No output will be produced.')
         if filetype == 'video' or is_cam:
             video_detect(
                 ipath=ipath,
@@ -485,11 +508,13 @@ def main():
                 mosaicsize=mosaicsize
             )
             # Check if args.distort_audio is allowed
+            if stop_ffmpeg:
+                break  # exit the loop immediately if signal is received - second loop
             if args.keep_audio and args.distort_audio:
-                print("Distorting audio for the video...")
+                tqdm.write("Distorting audio for the video...")
                 distort_now(ipath, opath)
             else:
-                print("Skipping audio distortion.")
+                tqdm.write("Skipping audio distortion.")
         elif filetype == 'image':
             image_detect(
                 ipath=ipath,
@@ -505,12 +530,14 @@ def main():
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize
             )
+            if stop_ffmpeg:
+                break  # exit the loop immediately if signal is received - third loop
         elif filetype is None:
-            print(f'Can\'t determine file type of file {ipath}. Skipping...')
+            tqdm.write(f'Can\'t determine file type of file {ipath}. Skipping...')
         elif filetype == 'notfound':
-            print(f'File {ipath} not found. Skipping...')
+            tqdm.write(f'File {ipath} not found. Skipping...')
         else:
-            print(f'File {ipath} has an unknown type {filetype}. Skipping...')
+            tqdm.write(f'File {ipath} has an unknown type {filetype}. Skipping...')
 
 
 if __name__ == '__main__':
