@@ -142,6 +142,8 @@ def video_detect(
         keep_audio: bool = False,
         copy_acodec: bool = False,
         mosaicsize: int = 20,
+        show_ffmpeg_config: bool = False,
+        show_ffmpeg_command: bool = False,
 ):
     try:
         if 'fps' in ffmpeg_config:
@@ -188,8 +190,20 @@ def video_detect(
             opath, format='FFMPEG', mode='I', **_ffmpeg_config
         )
                 
-        # Uncomment to check full ffmpeg command    tqdm.write(f'FFMPEG COMMAND: {_ffmpeg_config}')
-        
+        if show_ffmpeg_config:
+            tqdm.write(f'FFMPEG Config: {_ffmpeg_config}')
+            tqdm.write("")
+        if show_ffmpeg_command:
+            ffmpeg_command = (
+                f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} "
+                f"-i {_ffmpeg_config['audio_path']} "
+                f"-r {_ffmpeg_config['fps']} "
+                f"-c:v libx264 "
+                f"-c:a {_ffmpeg_config['audio_codec']} "
+                f"{opath}"
+            )
+            tqdm.write(f"FFMPEG Command: {ffmpeg_command}")
+            tqdm.write("")
 
     for frame in read_iter:
         #signal flag during ffmpeg video_detect
@@ -400,6 +414,18 @@ def parse_cli_args():
         '--copy-acodec', '-ca', default=False, action='store_true',
         help='Keep audio codec from video source file.')
     parser.add_argument(
+        '--show-ffmpeg-config', '-config', action='store_true', default=False,
+        help='Shows the FFmpeg config arguments string.'
+    )
+    parser.add_argument(
+        '--show-ffmpeg-command', '-command', action='store_true', default=False,
+        help='Shows the FFmpeg constructed command used for processing the video. Helpful for troublshooting.'
+    )
+    parser.add_argument(
+        '--show-both', '-both', action='store_true', default=False,
+        help='Shows both --show-ffmpeg-command & --show-ffmpeg-config'
+    )
+    parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
         help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.'
     )  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
@@ -419,6 +445,10 @@ def parse_cli_args():
 
     args = parser.parse_args()
 
+    if args.show_both:
+        args.show_ffmpeg_command = True
+        args.show_ffmpeg_config = True
+    
     # Automatically enable keep_audio if distort_audio is set
     if args.distort_audio:
         args.keep_audio = True
@@ -464,6 +494,8 @@ def main():
     keep_audio = args.keep_audio
     copy_acodec = args.copy_acodec
     ffmpeg_config = args.ffmpeg_config
+    show_ffmpeg_config = args.show_ffmpeg_config
+    show_ffmpeg_command = args.show_ffmpeg_command
     backend = args.backend
     in_shape = args.scale
     execution_provider = args.execution_provider
@@ -518,7 +550,9 @@ def main():
                 copy_acodec=copy_acodec,
                 ffmpeg_config=ffmpeg_config,
                 replaceimg=replaceimg,
-                mosaicsize=mosaicsize
+                mosaicsize=mosaicsize,
+                show_ffmpeg_config=show_ffmpeg_config,
+                show_ffmpeg_command=show_ffmpeg_command
             )
             # Check if args.distort_audio is allowed
             if stop_ffmpeg:
