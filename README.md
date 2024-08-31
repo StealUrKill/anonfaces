@@ -17,7 +17,7 @@ Original frame | `anonfaces` output (using default options)
 
 Release Candidate only supports this revision directly from GitHub, from which you can run:
 
-    python -m pip install "git+https://github.com/StealUrKill/anonfaces/tree/RC"
+    python -m pip install "git+https://github.com/StealUrKill/anonfaces.git@RC"
 
 This will only install the dependencies that are strictly required for running the tool. If you want to speed up processing by enabling hardware acceleration, you will need to manually install additional packages, see [Hardware acceleration](#hardware-acceleration)
 

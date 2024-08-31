@@ -1,5 +1,5 @@
 import os
-
+import platform
 from functools import lru_cache
 
 import numpy as np
@@ -65,6 +65,14 @@ class CenterFace:
                     raise ValueError(f'{override_execution_provider=} not found. Available providers are: {available_providers}')
                 ort_providers = [override_execution_provider]
 
+            # Check if OpenVINO is selected automatically or explicitly
+            if platform.system() == "Windows" and any('openvino' in provider.lower() for provider in ort_providers):
+                try:
+                    import onnxruntime.tools.add_openvino_win_libs as utils
+                    utils.add_openvino_libs_to_path()
+                except Exception as e:
+                    raise RuntimeError(f"Failed to add OpenVINO libraries to the path. Error: {e}")
+            
             self.sess = onnxruntime.InferenceSession(dyn_model.SerializeToString(), providers=ort_providers)
 
             preferred_provider = self.sess.get_providers()[0]
