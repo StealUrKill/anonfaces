@@ -242,7 +242,7 @@ def combine_video_audio(v_path: str, a_path: str, o_path: str):
     aclip = AudioFileClip(a_path)
 
     vclip.audio = aclip
-    vclip.write_videofile(o_path, codec="libx264")
+    vclip.write_videofile(o_path, codec="libx264", logger=None)
     
 def distort_now(ipath, opath):
 
@@ -387,8 +387,8 @@ def parse_cli_args():
         '--mosaicsize', default=20, type=int, metavar='width',
         help='Setting the mosaic size. Requires --replacewith mosaic option. Default: 20.')
     parser.add_argument(
-        '--distort-audio', default=False, action='store_true',
-        help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio).')
+        '--distort-audio', '-da', default=False, action='store_true',
+        help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio). This automatically applies --keep-audio but will not work with --copy-acodec due to MoviePy')
     parser.add_argument(
         '--keep-audio', '-k', default=False, action='store_true',
         help='Keep audio from video source file and copy it over to the output (only applies to videos).')
@@ -415,6 +415,15 @@ def parse_cli_args():
 
     args = parser.parse_args()
 
+    # Automatically enable keep_audio if distort_audio is set
+    if args.distort_audio:
+        args.keep_audio = True
+    
+    if args.keep_audio and args.copy_acodec:
+        tqdm.write("")
+        tqdm.write("Error: '--keep-audio' and '--copy-acodec' cannot be used together. Please choose one.")
+        exit(1)
+    
     if len(args.input) == 0:
         parser.print_help()
         tqdm.write('\nPlease supply at least one input path.')
@@ -510,7 +519,7 @@ def main():
             # Check if args.distort_audio is allowed
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - second loop
-            if args.keep_audio and args.distort_audio:
+            if args.distort_audio:
                 tqdm.write("Distorting audio for the video...")
                 distort_now(ipath, opath)
             else:
