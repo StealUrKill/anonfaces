@@ -16,6 +16,7 @@ import imageio.plugins.ffmpeg
 import cv2
 import sys
 import signal
+import platform
 from moviepy.editor import *
 from pedalboard import *
 from pedalboard.io import AudioFile
@@ -162,7 +163,10 @@ def video_detect(
         read_iter = cam_read_iter(reader)
     else:
         read_iter = reader.iter_data()
-        nframes = reader.count_frames()
+        if platform.system() == "Darwin":
+            nframes = None  # Frame counting fails on macOS - do not have a mac to test
+        else:
+            nframes = reader.count_frames()
     if nested:
         bar = tqdm(dynamic_ncols=True, total=nframes, position=1, leave=True)
     else:
