@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anonfaces"
-version = "1.0.5RC"
+version = "1.0.5"
 requires-python = "==3.11.*"
 description = "Video anonymization by face detection"
 readme = "README.md"
@@ -50,4 +50,4 @@ write_to = "anonfaces/_version.py"
 line-length = 120
 
 [project.urls]
-repository = "https://github.com/StealUrKill/anonfaces/tree/RC"
+repository = "https://github.com/StealUrKill/anonfaces/tree/stable1.0.5"

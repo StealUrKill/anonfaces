@@ -1,5 +1,5 @@
 
-# `anonfaces`: Video anonymization by face detection Release Candidate Branch
+# `anonfaces`: Video anonymization by face detection Stable 1.0.5 Branch
 
 `anonfaces` is a simple command-line tool for automatic anonymization of faces in videos or photos.
 It works by first detecting all human faces in each video frame and then applying an anonymization filter (blurring or black boxes) on each detected face region.
@@ -13,11 +13,11 @@ Original frame | `anonfaces` output (using default options)
 
 ## Installation
 
-`anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. There are currently no plans of creating a graphical user interface.
+`anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. Currently there is a GUI but its written in c# for .net-framework, possibly release/inclusion.
 
-Release Candidate only supports this revision directly from GitHub, from which you can run:
+Stable 1.0.5 Branch only supports this revision directly from GitHub, from which you can run:
 
-    python -m pip install "git+https://github.com/StealUrKill/anonfaces.git@RC"
+    python -m pip install "git+https://github.com/StealUrKill/anonfaces.git@stable1.0.5"
 
 This will only install the dependencies that are strictly required for running the tool. If you want to speed up processing by enabling hardware acceleration, you will need to manually install additional packages, see [Hardware acceleration](#hardware-acceleration)
 
@@ -27,7 +27,7 @@ This will only install the dependencies that are strictly required for running t
 	
 	python -c "import requests; exec(requests.get('https://raw.githubusercontent.com/StealUrKill/anonfaces/RC/add_remove_helper.py').text)"
 
-#### `This one liner does require requests to be installed`
+#### `This one liner does require requests to be installed. The script will try and install it for you if needed.`
 	
 	python -m pip install requests
 
@@ -59,71 +59,83 @@ To get an overview of usage and available options, run:
 The output may vary depending on your installed version, but it should look similar to this:
 
 ```
-usage: anonfaces [--output O] [--thresh T] [--scale WxH] [--preview] [--boxes]
-              [--draw-scores] [--mask-scale M]
-              [--replacewith {blur,solid,none,img,mosaic}]
-              [--replaceimg REPLACEIMG] [--mosaicsize width] [--keep-audio]
-              [--ffmpeg-config FFMPEG_CONFIG] [--backend {auto,onnxrt,opencv}]
-              [--execution-provider EP] [--version] [--help]
-              [input ...]
+usage: anonfaces [--output O] [--thresh T] [--scale WxH] [--preview] [--boxes] 
+                 [--draw-scores] [--mask-scale M] 
+                 [--replacewith {blur,solid,none,img,mosaic}] 
+                 [--replaceimg REPLACEIMG] [--mosaicsize width] 
+                 [--distort-audio] [--keep-audio] [--copy-acodec] 
+                 [--show-ffmpeg-config] [--show-ffmpeg-command] 
+                 [--show-both] [--ffmpeg-config FFMPEG_CONFIG] 
+                 [--backend {auto,onnxrt,opencv}] 
+                 [--execution-provider EP] [--version] 
+                 [--keep-metadata] [--help]
+                 [input ...]
 
 Video anonymization by face detection
 
 positional arguments:
-  input                 File path(s) or camera device name. It is possible to
-                        pass multiple paths by separating them by spaces or by
-                        using shell expansion (e.g. `$ anonfaces vids/*.mp4`).
-                        Alternatively, you can pass a directory as an input,
-                        in which case all files in the directory will be used
-                        as inputs. If a camera is installed, a live webcam
-                        demo can be started by running `$ anonfaces cam` (which
-                        is a shortcut for `$ anonfaces -p '<video0>'`.
+  input                 File path(s) or camera device name. It is possible to 
+                        pass multiple paths by separating them by spaces or by 
+                        using shell expansion (e.g. `$ anonfaces vids/*.mp4`). 
+                        Alternatively, you can pass a directory as an input, in 
+                        which case all files in the directory will be used as 
+                        inputs. If a camera is installed, a live webcam demo can 
+                        be started by running `$ anonfaces cam` (which is a 
+                        shortcut for `$ anonfaces -p '<video0>'`.
 
-optional arguments:
-  --output O, -o O      Output file name. Defaults to input path + postfix
-                        "_anon".
-  --thresh T, -t T      Detection threshold (tune this to trade off between
+options:
+  --output O, -o O      Output file name. Defaults to input path + postfix 
+                        "_anonymized".
+  --thresh T, -t T      Detection threshold (tune this to trade off between 
                         false positive and false negative rate). Default: 0.2.
-  --scale WxH, -s WxH   Downscale images for network inference to this size
+  --scale WxH, -s WxH   Downscale images for network inference to this size 
                         (format: WxH, example: --scale 640x360).
   --preview, -p         Enable live preview GUI (can decrease performance).
   --boxes               Use boxes instead of ellipse masks.
   --draw-scores         Draw detection scores onto outputs.
-  --mask-scale M        Scale factor for face masks, to make sure that masks
+  --mask-scale M        Scale factor for face masks, to make sure that masks 
                         cover the complete face. Default: 1.3.
   --replacewith {blur,solid,none,img,mosaic}
-                        Anonymization filter mode for face regions. "blur"
-                        applies a strong gaussian blurring, "solid" draws a
-                        solid black box, "none" does leaves the input
-                        unchanged, "img" replaces the face with a custom image
-                        and "mosaic" replaces the face with mosaic. Default:
+                        Anonymization filter mode for face regions. "blur" 
+                        applies a strong gaussian blurring, "solid" draws a 
+                        solid black box, "none" does leaves the input 
+                        unchanged, "img" replaces the face with a custom image 
+                        and "mosaic" replaces the face with mosaic. Default: 
                         "blur".
   --replaceimg REPLACEIMG
-                        Anonymization image for face regions. Requires
+                        Anonymization image for face regions. Requires 
                         --replacewith img option.
-  --mosaicsize width    Setting the mosaic size. Requires --replacewith mosaic
+  --mosaicsize width    Setting the mosaic size. Requires --replacewith mosaic 
                         option. Default: 20.
-  --distort-audio       Enable audio distortion for the output video.
-                        Applies pitch shift and gain effects to the audio.
-  --keep-audio, -k      Keep audio from video source file and copy it over to
+  --distort-audio, -da  Enable audio distortion for the output video (applies 
+                        pitch shift and gain effects to the audio). This 
+                        automatically applies --keep-audio but will not work 
+                        with --copy-acodec due to MoviePy.
+  --keep-audio, -k      Keep audio from video source file and copy it over to 
                         the output (only applies to videos).
-  --copy-acodec, -ca	Keep the audio codec from video source file.
+  --copy-acodec, -ca    Keep audio codec from video source file.
+  --show-ffmpeg-config, -config
+                        Shows the FFmpeg config arguments string.
+  --show-ffmpeg-command, -command
+                        Shows the FFmpeg constructed command used for processing 
+                        the video. Helpful for troubleshooting.
+  --show-both, -both    Shows both --show-ffmpeg-command & --show-ffmpeg-config.
   --ffmpeg-config FFMPEG_CONFIG
-                        FFMPEG config arguments for encoding output videos.
-                        This argument is expected in JSON notation. For a list
-                        of possible options, refer to the ffmpeg-imageio docs.
+                        FFMPEG config arguments for encoding output videos. 
+                        This argument is expected in JSON notation. For a list 
+                        of possible options, refer to the ffmpeg-imageio docs. 
                         Default: '{"codec": "libx264"}'.
   --backend {auto,onnxrt,opencv}
-                        Backend for ONNX model execution. Default: "auto"
+                        Backend for ONNX model execution. Default: "auto" 
                         (prefer onnxrt if available).
   --execution-provider EP, --ep EP
-                        Override onnxrt execution provider (see
-                        https://onnxruntime.ai/docs/execution-providers/). If
-                        not specified, the presumably fastest available one
-                        will be automatically selected. Only used if backend is
+                        Override onnxrt execution provider (see 
+                        https://onnxruntime.ai/docs/execution-providers/). If 
+                        not specified, the presumably fastest available one will 
+                        be automatically selected. Only used if backend is 
                         onnxrt.
-  --keep-metadata, -m   Keeps the original image metadata in place after blurring.
   --version             Print version number and exit.
+  --keep-metadata, -m   Keep metadata of the original image. Default : False.
   --help, -h            Show this help message and exit.
 ```
 
@@ -214,7 +226,7 @@ Windows users with capable non-Nvidia GPUs can enable GPU-accelerated inference 
 
 ### OpenVINO
 
-OpenVINO can accelerate inference even on CPU-only systems by a few percent, compared to the default OpenCV and ONNX Runtime implementations. It works on Linux and Windows, but not yet on Python 3.11 as of July 2023. Install the backend with:
+OpenVINO can accelerate inference even on CPU-only systems by a few percent, compared to the default OpenCV and ONNX Runtime implementations. It works on Linux and Windows. Install the backend with:
 
     python -m pip install onnx onnxruntime-openvino
 
