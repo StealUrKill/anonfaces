@@ -1,9 +1,16 @@
 
-# `anonfaces`: Video anonymization by face detection Release Candidate Branch
+# `anonfaces`: Video/Image anonymization by face detection with beta face recognition Release Candidate Branch
 
 `anonfaces` is a simple command-line tool for automatic anonymization of faces in videos or photos.
 It works by first detecting all human faces in each video frame and then applying an anonymization filter (blurring or black boxes) on each detected face region.
 By default all audio tracks are removed, if kept they are encoded as mp3 (libmp3lame), unless specified as --copy-acodec to copy codecs.
+
+`Face Recognition has now been imbedded via DLIB and prebuilt DLIB models.`
+This is still a slow process and more optimization should help.
+Please see credits and usage example for more info.
+### You will need Visual Studio to build `DLIB` unless you use prebuilts - https://github.com/z-mahmud22/Dlib_Windows_Python3.x
+### Install `DLIB` before installing `anonfaces`
+
 
 
 Original frame | `anonfaces` output (using default options)
@@ -13,7 +20,7 @@ Original frame | `anonfaces` output (using default options)
 
 ## Installation
 
-`anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. There are currently no plans of creating a graphical user interface.
+`anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. Currently there is a GUI but its written in c# for .net-framework, possibly release/inclusion.
 
 Release Candidate only supports this revision directly from GitHub, from which you can run:
 
@@ -27,7 +34,7 @@ This will only install the dependencies that are strictly required for running t
 	
 	python -c "import requests; exec(requests.get('https://raw.githubusercontent.com/StealUrKill/anonfaces/RC/add_remove_helper.py').text)"
 
-#### `This one liner does require requests to be installed`
+#### `This one liner does require requests to be installed. The script will try and install it for you if needed.`
 	
 	python -m pip install requests
 
@@ -149,7 +156,16 @@ Usage example:
 
 <img src="examples/city_anonymized_mosaic.jpg" width="70%" alt="$ anonfaces examples/city.jpg --replacewith mosaic --mosaicsize 20 -o examples/city_anonymized_mosaic.jpg"/>
 
+### Face Recognition
+By default face recognition is off. This is supported with --face-recog (-fr) and doing so will open a directory browser to load the reference images path. These are the faces that will not be blurred. I have tested with two faces so far and seems to work well. The speed is something to be desired though. The option `--fr-thresh` will set the face recognition threshold. Default is 0.60 here and seems standard. The higher the number the more lenient. A lower value will cause unwanted blurring on faces set in the reference path.
 
+Usage example:
+
+	anonfaces myvideos/city.jpg -face-recog on
+	
+`Faces Close (White shirt and Grey hoodie)` (notice the overlapping of filters on partially occluded faces) | `Faces Far (White and Blue Shirt)` (notice the the non overlapping filters)
+:--:|:--:
+![examples/city_anonymized_face_recognition_close.jpg](examples/city_anonymized_face_recognition_close.jpg) | ![$ anonfaces examples/city_anonymized_face_recognition_far.jpg](examples/city_anonymized_face_recognition_far.jpg)
 
 ### Tuning detection thresholds
 
@@ -214,7 +230,7 @@ Windows users with capable non-Nvidia GPUs can enable GPU-accelerated inference 
 
 ### OpenVINO
 
-OpenVINO can accelerate inference even on CPU-only systems by a few percent, compared to the default OpenCV and ONNX Runtime implementations. It works on Linux and Windows, but not yet on Python 3.11 as of July 2023. Install the backend with:
+OpenVINO can accelerate inference even on CPU-only systems by a few percent, compared to the default OpenCV and ONNX Runtime implementations. It works on Linux and Windows. Install the backend with:
 
     python -m pip install onnx onnxruntime-openvino
 
@@ -235,6 +251,9 @@ The face bounding boxes predicted by the CenterFace detector are then used as ma
 
 ## Credits
 
+- `dlib` is based on https://github.com/davisking/dlib, [released under Boost Software license](https://github.com/davisking/dlib/blob/master/LICENSE.txt)
+- The include dlib models `dlib_face_recognition_resnet_model_v1.dat` and `shape_predictor_5_face_landmarks.dat` are unmodified copies of https://github.com/davisking/dlib-models, 
+  [released under Creative Commons Zero v1.0 Universal],(https://github.com/davisking/dlib-models/blob/master/LICENSE)
 - `centerface.py` is based on https://github.com/Star-Clouds/centerface (revision [8c39a49](https://github.com/Star-Clouds/CenterFace/tree/8c39a497afb78fb2c064eb84bf010c273bb7d3ce)),
   [released under MIT license](https://github.com/Star-Clouds/CenterFace/blob/36afed/LICENSE)
 - The included model file `centerface.onnx` is an unmodified copy of the [`centerface_bnmerged.onnx`](https://github.com/Star-Clouds/CenterFace/blob/b82ec0c4844e89fd5a0305986aed9bdf33c72585/models/onnx/centerface_bnmerged.onnx) from https://github.com/Star-Clouds/centerface
