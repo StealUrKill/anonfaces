@@ -23,7 +23,10 @@ from pedalboard.io import AudioFile
 from tqdm import tqdm
 from anonfaces import __version__
 from anonfaces.centerface import CenterFace
-
+import dlib
+from scipy.spatial import distance
+from tkinter import Tk
+from tkinter.filedialog import askdirectory
 
 # Sends a signal to stop ffmpeg
 stop_ffmpeg = False
@@ -98,17 +101,66 @@ def draw_det(
         )
 
 
+#dlib face detector and face recognition models
+shape_path = f'{os.path.dirname(__file__)}/shape_predictor_5_face_landmarks.dat'
+face_path = f'{os.path.dirname(__file__)}/dlib_face_recognition_resnet_model_v1.dat'
+detector = dlib.get_frontal_face_detector()
+sp = dlib.shape_predictor(shape_path)
+facerec = dlib.face_recognition_model_v1(face_path)
+
+
+def load_reference_faces(reference_directory):
+    reference_descriptors = []
+    for file_name in os.listdir(reference_directory):
+        if file_name.endswith(('.jpg', '.jpeg', '.png')): #only tested with these formats. others might work
+            img_path = os.path.join(reference_directory, file_name)
+            img = dlib.load_rgb_image(img_path)
+            dets = detector(img, 1)#reduce the number of scales to speed up detection? 1 default here
+
+            if len(dets) > 0:
+                shape = sp(img, dets[0])
+                face_descriptor = facerec.compute_face_descriptor(img, shape)
+                reference_descriptors.append(np.array(face_descriptor))
+            else:
+                tqdm.write(f"No face detected in {img_path}")
+
+    return reference_descriptors
+
+
+# Function to check if a detected face matches any reference face
+def is_known_face(face_descriptor, reference_face_descriptors, threshold):
+    for ref_descriptor in reference_face_descriptors:
+        dist = distance.euclidean(face_descriptor, ref_descriptor)
+        if dist < threshold:
+            return True
+    return False
+
+
 def anonymize_frame(
         dets, frame, mask_scale,
-        replacewith, ellipse, draw_scores, replaceimg, mosaicsize
+        replacewith, ellipse, draw_scores, replaceimg, mosaicsize, face_recog, reference_face_descriptors=None, fr_thresh=0.60
 ):
     for i, det in enumerate(dets):
         boxes, score = det[:4], det[4]
         x1, y1, x2, y2 = boxes.astype(int)
         x1, y1, x2, y2 = scale_bb(x1, y1, x2, y2, mask_scale)
-        # Clip bb coordinates to valid frame region
         y1, y2 = max(0, y1), min(frame.shape[0] - 1, y2)
         x1, x2 = max(0, x1), min(frame.shape[1] - 1, x2)
+
+        # Extract face and create an embedding
+        face = frame[y1:y2, x1:x2]
+        face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+        dets = detector(face_rgb, 1)#reduce the number of scales to speed up detection? 1 default here
+
+        if face_recog == 'on':
+            if len(dets) > 0:
+                shape = sp(face_rgb, dets[0])
+                face_descriptor = facerec.compute_face_descriptor(face_rgb, shape)
+                face_descriptor = np.array(face_descriptor)#.flatten() #might not need flatten - follow up on
+
+                # Check if the detected face is a known reference face
+                if is_known_face(face_descriptor, reference_face_descriptors, threshold=fr_thresh):
+                    continue  # Hopefully skip blurring for known faces
 
         draw_det(
             frame, score, i, x1, y1, x2, y2,
@@ -118,6 +170,7 @@ def anonymize_frame(
             replaceimg=replaceimg,
             mosaicsize=mosaicsize
         )
+
 
 
 def cam_read_iter(reader):
@@ -144,6 +197,9 @@ def video_detect(
         mosaicsize: int = 20,
         show_ffmpeg_config: bool = False,
         show_ffmpeg_command: bool = False,
+        face_recog: str = 'off',  # Add face recog parameter from below
+        reference_face_descriptors=None,
+        fr_thresh=0.60
 ):
     try:
         if 'fps' in ffmpeg_config:
@@ -166,7 +222,7 @@ def video_detect(
     else:
         read_iter = reader.iter_data()
         if platform.system() == "Darwin":
-            nframes = None  # Frame counting fails on macOS - do not have a mac to test
+            nframes = None  # Frame counting fails on macOS - do not have a mac to test - someone? anyone?
         else:
             nframes = reader.count_frames()
     if nested:
@@ -216,7 +272,8 @@ def video_detect(
         anonymize_frame(
             dets, frame, mask_scale=mask_scale,
             replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-            replaceimg=replaceimg, mosaicsize=mosaicsize
+            replaceimg=replaceimg, mosaicsize=mosaicsize, face_recog=face_recog,
+            reference_face_descriptors=reference_face_descriptors, fr_thresh=fr_thresh
         )
 
         if opath is not None:
@@ -298,6 +355,9 @@ def image_detect(
         keep_metadata: bool,
         replaceimg = None,
         mosaicsize: int = 20,
+        face_recog: str = 'off',  # Add face_recog parameter
+        reference_face_descriptors=None,
+        fr_thresh=0.60
 ):
     frame = imageio.imread(ipath)
     
@@ -312,7 +372,8 @@ def image_detect(
     anonymize_frame(
         dets, frame, mask_scale=mask_scale,
         replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-        replaceimg=replaceimg, mosaicsize=mosaicsize
+        replaceimg=replaceimg, mosaicsize=mosaicsize, face_recog=face_recog,
+        reference_face_descriptors=reference_face_descriptors, fr_thresh=fr_thresh
     )
 
     if enable_preview:
@@ -326,7 +387,7 @@ def image_detect(
         # Save image with EXIF metadata
         imageio.imsave(opath, frame, exif=exif_dict)
 
-    tqdm.write(f'Output saved to {opath}')
+    #tqdm.write(f'Output saved to {opath}')
 
 
 def get_file_type(path):
@@ -370,7 +431,7 @@ def get_anonymized_image(frame,
 
 
 def parse_cli_args():
-    parser = argparse.ArgumentParser(description='Video anonymization by face detection', add_help=False)
+    parser = argparse.ArgumentParser(description='Video/Image anonymization by face detection with beta stage face recognition', add_help=False)
     parser.add_argument(
         'input', nargs='*',
         help=f'File path(s) or camera device name. It is possible to pass multiple paths by separating them by spaces or by using shell expansion (e.g. `$ anonfaces vids/*.mp4`). Alternatively, you can pass a directory as an input, in which case all files in the directory will be used as inputs. If a camera is installed, a live webcam demo can be started by running `$ anonfaces cam` (which is a shortcut for `$ anonfaces -p \'<video0>\'`.')
@@ -405,6 +466,12 @@ def parse_cli_args():
         '--mosaicsize', default=20, type=int, metavar='width',
         help='Setting the mosaic size. Requires --replacewith mosaic option. Default: 20.')
     parser.add_argument(
+        '--face-recog', '-fr', choices=['on', 'off'], default='off',
+        help="Enable face recognition with 'on' and the program will ask for a directory")
+    parser.add_argument(
+        '--fr-thresh', '-ft', type=float, default=0.60,
+    help="Set the face recognition threshold. Default is 0.60 here and seems standard. More testing needed")
+    parser.add_argument(
         '--distort-audio', '-da', default=False, action='store_true',
         help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio). This automatically applies --keep-audio but will not work with --copy-acodec due to MoviePy')
     parser.add_argument(
@@ -433,8 +500,11 @@ def parse_cli_args():
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
     parser.add_argument(
-        '--execution-provider', '--ep', default=None, metavar='EP',
+        '--execution-provider', '-ep', default=None, metavar='EP',
         help='Override onnxrt execution provider (see https://onnxruntime.ai/docs/execution-providers/). If not specified, the presumably fastest available one will be automatically selected. Only used if backend is onnxrt.')
+    parser.add_argument(
+        '--info', default=False, action="store_true",
+        help='Shows file input/output location. Default is off the clear clutter.')
     parser.add_argument(
         '--version', action='version', version=__version__,
         help='Print version number and exit.')
@@ -474,6 +544,13 @@ def main():
     args = parse_cli_args()
     ipaths = []
     
+    # Directory only shows if face recog arg = on
+    if args.face_recog == 'on':
+        reference_directory = select_reference_directory()
+        reference_face_descriptors = load_reference_faces(reference_directory)
+    else:
+        reference_face_descriptors = []
+    
     # add files in folders
     for path in args.input:
         if os.path.isdir(path):
@@ -499,15 +576,17 @@ def main():
     backend = args.backend
     in_shape = args.scale
     execution_provider = args.execution_provider
+    threshold = args.thresh
     mosaicsize = args.mosaicsize
     keep_metadata = args.keep_metadata
     replaceimg = None
+    info = args.info
     if in_shape is not None:
         w, h = in_shape.split('x')
         in_shape = int(w), int(h)
     if replacewith == "img":
         replaceimg = imageio.imread(args.replaceimg)
-        print(f'After opening {args.replaceimg} shape: {replaceimg.shape}')
+        tqdm.write(f'After opening {args.replaceimg} shape: {replaceimg.shape}')
 
 
     # TODO: scalar downscaling setting (-> in_shape), preserving aspect ratio
@@ -515,7 +594,7 @@ def main():
 
     multi_file = len(ipaths) > 1
     if multi_file:
-        ipaths = tqdm(ipaths, position=0, dynamic_ncols=True, desc='Batch progress')
+        ipaths = tqdm(ipaths, position=0, dynamic_ncols=True, desc='Batch progress', leave=True)
 
     for ipath in ipaths:
         if stop_ffmpeg:
@@ -529,8 +608,9 @@ def main():
         if opath is None and not is_cam:
             root, ext = os.path.splitext(ipath)
             opath = f'{root}_anon{ext}'
-        tqdm.write(f'Input:  {ipath}\nOutput: {opath}')
-        print()
+        if info:
+            tqdm.write(f"Input:  {ipath}\nOutput: {opath}")
+            tqdm.write()
         if opath is None and not enable_preview:
             tqdm.write('No output file is specified and the preview GUI is disabled. No output will be produced.')
         if filetype == 'video' or is_cam:
@@ -552,7 +632,10 @@ def main():
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize,
                 show_ffmpeg_config=show_ffmpeg_config,
-                show_ffmpeg_command=show_ffmpeg_command
+                show_ffmpeg_command=show_ffmpeg_command,
+                fr_thresh=args.fr_thresh,
+                face_recog=args.face_recog,  # Pass the face recog argument
+                reference_face_descriptors=reference_face_descriptors if args.face_recog == 'on' else None  # Pass reference descriptors if face recog = on
             )
             # Check if args.distort_audio is allowed
             if stop_ffmpeg:
@@ -575,7 +658,10 @@ def main():
                 enable_preview=enable_preview,
                 keep_metadata=keep_metadata,
                 replaceimg=replaceimg,
-                mosaicsize=mosaicsize
+                mosaicsize=mosaicsize,
+                fr_thresh=args.fr_thresh,
+                face_recog=args.face_recog,  # Pass the face recog argument
+                reference_face_descriptors=reference_face_descriptors if args.face_recog == 'on' else None  # Pass reference descriptors if face recog = on
             )
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - third loop
@@ -586,6 +672,21 @@ def main():
         else:
             tqdm.write(f'File {ipath} has an unknown type {filetype}. Skipping...')
 
+def select_reference_directory():
+    # Initialize directory window aka Tkinter and hide the root/console window
+    root = Tk()
+    root.withdraw()
+
+    # Choose your directory
+    reference_directory = askdirectory(title="Select the directory containing reference images")
+
+    if not reference_directory:
+        tqdm.write("No directory selected. Exiting.")
+        root.destroy()
+        sys.exit(0)
+
+    root.destroy()
+    return reference_directory
 
 if __name__ == '__main__':
     main()

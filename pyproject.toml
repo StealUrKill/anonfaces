@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anonfaces"
-version = "1.0.5RC"
+version = "1.0.6RC"
 requires-python = "==3.11.*"
-description = "Video anonymization by face detection"
+description = "Video/Image anonymization by face detection with beta stage face recognition"
 readme = "README.md"
 license = {file = "LICENSE"}
 classifiers = [
@@ -41,7 +41,11 @@ anonfaces = "anonfaces.anonfaces:main"
 packages = ["anonfaces"]
 
 [tool.setuptools.package-data]
-anonfaces = ["centerface.onnx"]
+anonfaces = [
+    "centerface.onnx",
+    "shape_predictor_5_face_landmarks.dat",
+    "dlib_face_recognition_resnet_model_v1.dat"
+]
 
 [tool.setuptools_scm]
 write_to = "anonfaces/_version.py"
