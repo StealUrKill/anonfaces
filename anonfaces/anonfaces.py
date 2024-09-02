@@ -111,6 +111,7 @@ facerec = dlib.face_recognition_model_v1(face_path)
 
 def load_reference_faces(reference_directory):
     reference_descriptors = []
+    reference_names = []
     for file_name in os.listdir(reference_directory):
         if file_name.endswith(('.jpg', '.jpeg', '.png')): #only tested with these formats. others might work
             img_path = os.path.join(reference_directory, file_name)
@@ -121,24 +122,28 @@ def load_reference_faces(reference_directory):
                 shape = sp(img, dets[0])
                 face_descriptor = facerec.compute_face_descriptor(img, shape)
                 reference_descriptors.append(np.array(face_descriptor))
+                reference_names.append(os.path.splitext(file_name)[0])  # fetch the persons name without ext from img file
             else:
                 tqdm.write(f"No face detected in {img_path}")
 
-    return reference_descriptors
+    return reference_descriptors, reference_names
 
 
 # Function to check if a detected face matches any reference face
-def is_known_face(face_descriptor, reference_face_descriptors, threshold):
-    for ref_descriptor in reference_face_descriptors:
+def is_known_face(face_descriptor, reference_face_descriptors, reference_names, threshold):
+    for ref_descriptor, ref_name in zip(reference_face_descriptors, reference_names):
+    #for ref_descriptor in reference_face_descriptors:
         dist = distance.euclidean(face_descriptor, ref_descriptor)
         if dist < threshold:
-            return True
-    return False
+            return ref_name
+    return None
 
 
 def anonymize_frame(
         dets, frame, mask_scale,
-        replacewith, ellipse, draw_scores, replaceimg, mosaicsize, face_recog, reference_face_descriptors=None, fr_thresh=0.60
+        replacewith, ellipse, draw_scores, replaceimg, mosaicsize,
+        face_recog, fr_name,
+        reference_face_descriptors=None, reference_names=None, fr_thresh=0.60,
 ):
     for i, det in enumerate(dets):
         boxes, score = det[:4], det[4]
@@ -147,19 +152,32 @@ def anonymize_frame(
         y1, y2 = max(0, y1), min(frame.shape[0] - 1, y2)
         x1, x2 = max(0, x1), min(frame.shape[1] - 1, x2)
 
-        # Extract face and create an embedding
-        face = frame[y1:y2, x1:x2]
-        face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-        dets = detector(face_rgb, 1)#reduce the number of scales to speed up detection? 1 default here
-
-        if face_recog == 'on':
+        if face_recog and reference_face_descriptors:
+            # Extract face and create an embedding - Now only done if face recog is on
+            face = frame[y1:y2, x1:x2]
+            face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+            #face_rgb = cv2.resize(face_rgb, (128, 128))  # option to resize for faster times and still match - testing on an off locally
+            dets = detector(face_rgb, 1)#reduce the number of scales to speed up detection? 1 default here
+            
             if len(dets) > 0:
                 shape = sp(face_rgb, dets[0])
                 face_descriptor = facerec.compute_face_descriptor(face_rgb, shape)
-                face_descriptor = np.array(face_descriptor)#.flatten() #might not need flatten - follow up on
+                face_descriptor = np.array(face_descriptor)
 
+                if face_descriptor.ndim != 1:
+                    face_descriptor = face_descriptor.flatten()#seems slower with no benefit yet - info below
+                    # uncomment to see what dimension the array is in.
+                    #tqdm.write(f'face_descriptor.ndim: {face_descriptor.ndim}')
+                
                 # Check if the detected face is a known reference face
-                if is_known_face(face_descriptor, reference_face_descriptors, threshold=fr_thresh):
+                matched_name = is_known_face(face_descriptor, reference_face_descriptors, reference_names, threshold=fr_thresh)
+                if matched_name:
+                    if fr_name:
+                        text_size = cv2.getTextSize(matched_name, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+                        text_x = x1 + (x2 - x1 - text_size[0]) // 2
+                        text_y = y1 + text_size[1]
+                        cv2.putText(frame, matched_name, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36, 255, 12), 2)
+
                     continue  # Hopefully skip blurring for known faces
 
         draw_det(
@@ -193,13 +211,16 @@ def video_detect(
         ffmpeg_config: Dict[str, str],
         replaceimg = None,
         keep_audio: bool = False,
-        copy_acodec: bool = False,
         mosaicsize: int = 20,
+        #new below
+        copy_acodec: bool = False,
         show_ffmpeg_config: bool = False,
         show_ffmpeg_command: bool = False,
-        face_recog: str = 'off',  # Add face recog parameter from below
+        face_recog: bool = False,  # Add face recog parameter from below
         reference_face_descriptors=None,
-        fr_thresh=0.60
+        reference_names=None,
+        fr_thresh=0.60,
+        fr_name: bool = False
 ):
     try:
         if 'fps' in ffmpeg_config:
@@ -272,8 +293,12 @@ def video_detect(
         anonymize_frame(
             dets, frame, mask_scale=mask_scale,
             replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-            replaceimg=replaceimg, mosaicsize=mosaicsize, face_recog=face_recog,
-            reference_face_descriptors=reference_face_descriptors, fr_thresh=fr_thresh
+            replaceimg=replaceimg, mosaicsize=mosaicsize,
+            #new below
+            face_recog=face_recog,
+            reference_face_descriptors=reference_face_descriptors,
+            reference_names=reference_names, fr_thresh=fr_thresh,
+            fr_name=fr_name
         )
 
         if opath is not None:
@@ -355,9 +380,12 @@ def image_detect(
         keep_metadata: bool,
         replaceimg = None,
         mosaicsize: int = 20,
-        face_recog: str = 'off',  # Add face_recog parameter
+        #new below
+        face_recog: bool = False,  # Add face_recog parameter
         reference_face_descriptors=None,
-        fr_thresh=0.60
+        reference_names=None,
+        fr_thresh=0.60,
+        fr_name: bool = False
 ):
     frame = imageio.imread(ipath)
     
@@ -372,8 +400,12 @@ def image_detect(
     anonymize_frame(
         dets, frame, mask_scale=mask_scale,
         replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-        replaceimg=replaceimg, mosaicsize=mosaicsize, face_recog=face_recog,
-        reference_face_descriptors=reference_face_descriptors, fr_thresh=fr_thresh
+        replaceimg=replaceimg, mosaicsize=mosaicsize,
+        #new below
+        face_recog=face_recog,
+        reference_face_descriptors=reference_face_descriptors,
+        reference_names=reference_names, fr_thresh=fr_thresh,
+        fr_name=fr_name
     )
 
     if enable_preview:
@@ -451,7 +483,7 @@ def parse_cli_args():
         '--boxes', default=False, action='store_true',
         help='Use boxes instead of ellipse masks.')
     parser.add_argument(
-        '--draw-scores', default=False, action='store_true',
+        '--draw-scores', '-ds', default=False, action='store_true',
         help='Draw detection scores onto outputs.')
     parser.add_argument(
         '--mask-scale', default=1.3, type=float, metavar='M',
@@ -466,8 +498,15 @@ def parse_cli_args():
         '--mosaicsize', default=20, type=int, metavar='width',
         help='Setting the mosaic size. Requires --replacewith mosaic option. Default: 20.')
     parser.add_argument(
-        '--face-recog', '-fr', choices=['on', 'off'], default='off',
-        help="Enable face recognition with 'on' and the program will ask for a directory")
+        '--face-recog', '-fr', default=False, action='store_true',
+        help="Enable face recognition and the program will ask for a directory of reference faces to not blur")
+    parser.add_argument(
+        '--fr-name', '-name', default=False, action='store_true',
+        help="Enable face recognition names from image name (example: 'John Doe.jpg'}).")    
+    parser.add_argument(
+        '--frn', '-frn', action='store_true', default=False,
+        help="Enable both face recognition and name labeling from image names."
+    )
     parser.add_argument(
         '--fr-thresh', '-ft', type=float, default=0.60,
     help="Set the face recognition threshold. Default is 0.60 here and seems standard. More testing needed")
@@ -512,12 +551,19 @@ def parse_cli_args():
         '--keep-metadata', '-m', default=False, action='store_true',
         help='Keep metadata of the original image. Default : False.')
     parser.add_argument('--help', '-h', action='help', help='Show this help message and exit.')
-
+    parser.add_argument(
+        '--all', '-all', nargs=0, action=MyFavorite,
+        help="Enables face recognition, names from image names, preview, draw scores, and keep audio."
+    )
     args = parser.parse_args()
 
     if args.show_both:
         args.show_ffmpeg_command = True
         args.show_ffmpeg_config = True
+    
+    if args.frn:
+        args.face_recog = True
+        args.fr_name = True
     
     # Automatically enable keep_audio if distort_audio is set
     if args.distort_audio:
@@ -539,17 +585,24 @@ def parse_cli_args():
 
     return args
 
+class MyFavorite(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, 'face_recog', True)
+        setattr(namespace, 'fr_name', True)
+        setattr(namespace, 'draw_scores', True)
+        setattr(namespace, 'preview', True)
+        setattr(namespace, 'keep_audio', True)
 
 def main():
     args = parse_cli_args()
     ipaths = []
     
     # Directory only shows if face recog arg = on
-    if args.face_recog == 'on':
+    if args.face_recog:
         reference_directory = select_reference_directory()
-        reference_face_descriptors = load_reference_faces(reference_directory)
+        reference_face_descriptors, reference_names = load_reference_faces(reference_directory)
     else:
-        reference_face_descriptors = []
+        reference_face_descriptors, reference_names = [], []
     
     # add files in folders
     for path in args.input:
@@ -569,10 +622,7 @@ def main():
     ellipse = not args.boxes
     mask_scale = args.mask_scale
     keep_audio = args.keep_audio
-    copy_acodec = args.copy_acodec
     ffmpeg_config = args.ffmpeg_config
-    show_ffmpeg_config = args.show_ffmpeg_config
-    show_ffmpeg_command = args.show_ffmpeg_command
     backend = args.backend
     in_shape = args.scale
     execution_provider = args.execution_provider
@@ -580,7 +630,12 @@ def main():
     mosaicsize = args.mosaicsize
     keep_metadata = args.keep_metadata
     replaceimg = None
+    #new below
+    copy_acodec = args.copy_acodec
     info = args.info
+    show_ffmpeg_config = args.show_ffmpeg_config
+    show_ffmpeg_command = args.show_ffmpeg_command
+    fr_name = args.fr_name
     if in_shape is not None:
         w, h = in_shape.split('x')
         in_shape = int(w), int(h)
@@ -627,19 +682,22 @@ def main():
                 enable_preview=enable_preview,
                 nested=multi_file,
                 keep_audio=keep_audio,
-                copy_acodec=copy_acodec,
                 ffmpeg_config=ffmpeg_config,
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize,
+                #new below
+                copy_acodec=copy_acodec,
                 show_ffmpeg_config=show_ffmpeg_config,
                 show_ffmpeg_command=show_ffmpeg_command,
                 fr_thresh=args.fr_thresh,
                 face_recog=args.face_recog,  # Pass the face recog argument
-                reference_face_descriptors=reference_face_descriptors if args.face_recog == 'on' else None  # Pass reference descriptors if face recog = on
+                reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
+                reference_names=reference_names if args.face_recog else None,  # Pass reference names
+                fr_name=args.fr_name
             )
-            # Check if args.distort_audio is allowed
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - second loop
+            # Check if args.distort_audio is allowed
             if args.distort_audio:
                 tqdm.write("Distorting audio for the video...")
                 distort_now(ipath, opath)
@@ -659,9 +717,12 @@ def main():
                 keep_metadata=keep_metadata,
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize,
+                #new below
                 fr_thresh=args.fr_thresh,
                 face_recog=args.face_recog,  # Pass the face recog argument
-                reference_face_descriptors=reference_face_descriptors if args.face_recog == 'on' else None  # Pass reference descriptors if face recog = on
+                reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
+                reference_names=reference_names if args.face_recog else None,  # Pass reference names
+                fr_name= args.fr_name
             )
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - third loop
