@@ -36,6 +36,7 @@ openvino = ["onnxruntime-openvino==1.18.0", "openvino==2024.1.0"]
 
 [project.scripts]
 anonfaces = "anonfaces.anonfaces:main"
+cleanup = "anonfaces.cleanup:remove_database"
 
 [tool.setuptools]
 packages = ["anonfaces"]

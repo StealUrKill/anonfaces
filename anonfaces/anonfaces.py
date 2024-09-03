@@ -23,7 +23,11 @@ from pedalboard.io import AudioFile
 from tqdm import tqdm
 from anonfaces import __version__
 from anonfaces.centerface import CenterFace
+import tkinter as tk
+from anonfaces.face_database_gui import FaceDatabaseApp
 import dlib
+import sqlite3
+import re
 from scipy.spatial import distance
 from tkinter import Tk
 from tkinter.filedialog import askdirectory
@@ -109,6 +113,7 @@ sp = dlib.shape_predictor(shape_path)
 facerec = dlib.face_recognition_model_v1(face_path)
 
 
+#leaving here to fallback to directory loading faces
 def load_reference_faces(reference_directory):
     reference_descriptors = []
     reference_names = []
@@ -122,14 +127,17 @@ def load_reference_faces(reference_directory):
                 shape = sp(img, dets[0])
                 face_descriptor = facerec.compute_face_descriptor(img, shape)
                 reference_descriptors.append(np.array(face_descriptor))
-                reference_names.append(os.path.splitext(file_name)[0])  # fetch the persons name without ext from img file
+                # Clean up the name by removing numbers and file extensions so we can have multiple images John_Doe1.jpg
+                cleaned_name = re.sub(r'\d+', '', os.path.splitext(file_name)[0])
+                cleaned_name = cleaned_name.replace('_', ' ').title()
+                reference_names.append(cleaned_name)
             else:
                 tqdm.write(f"No face detected in {img_path}")
 
     return reference_descriptors, reference_names
 
 
-# Function to check if a detected face matches any reference face
+# check if a detected face matches any reference face
 def is_known_face(face_descriptor, reference_face_descriptors, reference_names, threshold):
     for ref_descriptor, ref_name in zip(reference_face_descriptors, reference_names):
     #for ref_descriptor in reference_face_descriptors:
@@ -137,6 +145,41 @@ def is_known_face(face_descriptor, reference_face_descriptors, reference_names, 
         if dist < threshold:
             return ref_name
     return None
+
+
+def load_reference_faces_from_db(db_path):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # get all persons and their associated images
+    cursor.execute('''
+        SELECT persons.name, images.image 
+        FROM persons 
+        JOIN images ON persons.id = images.person_id
+    ''')
+    
+    reference_descriptors = []
+    reference_names = []
+
+    for name, image_blob in cursor.fetchall():
+        # convert sql BLOB back to an image
+        img = np.frombuffer(image_blob, dtype=np.uint8)
+        img = cv2.imdecode(img, cv2.IMREAD_COLOR)
+        
+        # process the image using dlib
+        dets = detector(img, 1)
+        if len(dets) > 0:
+            shape = sp(img, dets[0])
+            face_descriptor = facerec.compute_face_descriptor(img, shape)
+            reference_descriptors.append(np.array(face_descriptor))
+            # first letter of first and last capitalized, remove all numbers
+            cleaned_name = ' '.join([part.capitalize() for part in ''.join([i for i in name if not i.isdigit()]).split()])
+            reference_names.append(cleaned_name)
+        else:
+            tqdm.write(f"No face detected in {name}")
+
+    conn.close()
+    return reference_descriptors, reference_names
 
 
 def anonymize_frame(
@@ -504,12 +547,14 @@ def parse_cli_args():
         '--fr-name', '-name', default=False, action='store_true',
         help="Enable face recognition names from image name (example: 'John Doe.jpg'}).")    
     parser.add_argument(
+        '--face-gui', '-fg', default=False, action='store_true',
+        help="Launch the face database GUI without running face recognition.")
+    parser.add_argument(
         '--frn', '-frn', action='store_true', default=False,
-        help="Enable both face recognition and name labeling from image names."
-    )
+        help="Enable both face recognition and name labeling from image names.")
     parser.add_argument(
         '--fr-thresh', '-ft', type=float, default=0.60,
-    help="Set the face recognition threshold. Default is 0.60 here and seems standard. More testing needed")
+        help="Set the face recognition threshold. Default is 0.60 here and seems standard. More testing needed")
     parser.add_argument(
         '--distort-audio', '-da', default=False, action='store_true',
         help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio). This automatically applies --keep-audio but will not work with --copy-acodec due to MoviePy')
@@ -521,20 +566,16 @@ def parse_cli_args():
         help='Keep audio codec from video source file.')
     parser.add_argument(
         '--show-ffmpeg-config', '-config', action='store_true', default=False,
-        help='Shows the FFmpeg config arguments string.'
-    )
+        help='Shows the FFmpeg config arguments string.')
     parser.add_argument(
         '--show-ffmpeg-command', '-command', action='store_true', default=False,
-        help='Shows the FFmpeg constructed command used for processing the video. Helpful for troublshooting.'
-    )
+        help='Shows the FFmpeg constructed command used for processing the video. Helpful for troublshooting.')
     parser.add_argument(
         '--show-both', '-both', action='store_true', default=False,
-        help='Shows both --show-ffmpeg-command & --show-ffmpeg-config'
-    )
+        help='Shows both --show-ffmpeg-command & --show-ffmpeg-config')
     parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
-        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.'
-    )  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
+        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.')  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
     parser.add_argument(
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
@@ -553,8 +594,8 @@ def parse_cli_args():
     parser.add_argument('--help', '-h', action='help', help='Show this help message and exit.')
     parser.add_argument(
         '--all', '-all', nargs=0, action=MyFavorite,
-        help="Enables face recognition, names from image names, preview, draw scores, and keep audio."
-    )
+        help="Enables face recognition, names from image names, preview, draw scores, and keep audio.")
+    
     args = parser.parse_args()
 
     if args.show_both:
@@ -565,6 +606,19 @@ def parse_cli_args():
         args.face_recog = True
         args.fr_name = True
     
+    if args.face_recog:
+        root = tk.Tk()
+        app = FaceDatabaseApp(root)
+        root.protocol("WM_DELETE_WINDOW", app.close_app)
+        root.mainloop()
+        
+    if args.face_gui:     
+        root = tk.Tk()
+        app = FaceDatabaseApp(root)
+        root.protocol("WM_DELETE_WINDOW", app.close_app)
+        root.mainloop()
+        exit(1)
+        
     # Automatically enable keep_audio if distort_audio is set
     if args.distort_audio:
         args.keep_audio = True
@@ -599,8 +653,12 @@ def main():
     
     # Directory only shows if face recog arg = on
     if args.face_recog:
-        reference_directory = select_reference_directory()
-        reference_face_descriptors, reference_names = load_reference_faces(reference_directory)
+        db_path = f'{os.path.dirname(__file__)}/face_db.sqlite'
+        reference_face_descriptors, reference_names = load_reference_faces_from_db(db_path)
+        #uncomment for local directory reference faces-leaving in here for a fallback later
+        #will keep both but figure out the best way to handle the option.....
+        #reference_directory = select_reference_directory()
+        #reference_face_descriptors, reference_names = load_reference_faces(reference_directory)
     else:
         reference_face_descriptors, reference_names = [], []
     
@@ -665,7 +723,7 @@ def main():
             opath = f'{root}_anon{ext}'
         if info:
             tqdm.write(f"Input:  {ipath}\nOutput: {opath}")
-            tqdm.write()
+            tqdm.write("")
         if opath is None and not enable_preview:
             tqdm.write('No output file is specified and the preview GUI is disabled. No output will be produced.')
         if filetype == 'video' or is_cam:
@@ -733,6 +791,8 @@ def main():
         else:
             tqdm.write(f'File {ipath} has an unknown type {filetype}. Skipping...')
 
+
+#leaving this in here for a fallback
 def select_reference_directory():
     # Initialize directory window aka Tkinter and hide the root/console window
     root = Tk()
