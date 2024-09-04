@@ -5,33 +5,39 @@ import sqlite3
 import io
 import os
 
-# Will add a bunch of comments as this is my first gui
-# One DB - Two Tables - Simple
-conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), 'face_db.sqlite'))
-
-cursor = conn.cursor()
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS persons (
-    id INTEGER PRIMARY KEY,
-    name TEXT UNIQUE
-)
-''')
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS images (
-    id INTEGER PRIMARY KEY,
-    person_id INTEGER,
-    image BLOB,
-    FOREIGN KEY (person_id) REFERENCES persons(id)
-)
-''')
-conn.commit()
+def initialize_database():
+    database_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        'database',
+        'face_db.sqlite'
+    )
+    conn = sqlite3.connect(database_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS persons (
+        id INTEGER PRIMARY KEY,
+        name TEXT UNIQUE
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS images (
+        id INTEGER PRIMARY KEY,
+        person_id INTEGER,
+        image BLOB,
+        FOREIGN KEY (person_id) REFERENCES persons(id)
+    )
+    ''')
+    conn.commit()
+    return conn, cursor
+    
 
 class FaceDatabaseApp:
     def __init__(self, root):
         self.root = root
+        self.is_closed = False
         self.root.title("Face Database Manager")
         self.root.resizable(True, True)
-
+        self.conn, self.cursor = initialize_database()
         # Top 3 Buttons
         self.button_frame = tk.Frame(root)
         self.button_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
@@ -143,26 +149,26 @@ class FaceDatabaseApp:
     
         if name:
             # count how many images are already associated with this person to limit the db
-            cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
-            person_id_row = cursor.fetchone()
+            self.cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
+            person_id_row = self.cursor.fetchone()
             if person_id_row:
                 person_id = person_id_row[0]
-                cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
-                image_count = cursor.fetchone()[0]
+                self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
+                image_count = self.cursor.fetchone()[0]
                 if image_count >= 5:
                     messagebox.showwarning("Limit Reached", "This person already has 5 images. No more can be added.")
                     return
             else:
-                cursor.execute('INSERT OR IGNORE INTO persons (name) VALUES (?)', (name,))
-                cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
-                person_id = cursor.fetchone()[0]
+                self.cursor.execute('INSERT OR IGNORE INTO persons (name) VALUES (?)', (name,))
+                self.cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
+                person_id = self.cursor.fetchone()[0]
     
             with open(file_path, 'rb') as file:
                 image_data = file.read()
     
             # db insert image associated with the person
-            cursor.execute('INSERT INTO images (person_id, image) VALUES (?, ?)', (person_id, image_data))
-            conn.commit()
+            self.cursor.execute('INSERT INTO images (person_id, image) VALUES (?, ?)', (person_id, image_data))
+            self.conn.commit()
             self.load_images()  # refreshes images
         else:
             messagebox.showwarning("No Name", "No name provided, skipping.")
@@ -174,9 +180,9 @@ class FaceDatabaseApp:
         
         if confirm:
             try:
-                cursor.execute('DELETE FROM images')
-                cursor.execute('DELETE FROM persons')
-                conn.commit()
+                self.cursor.execute('DELETE FROM images')
+                self.cursor.execute('DELETE FROM persons')
+                self.conn.commit()
                 messagebox.showinfo("Success", "All users and images have been deleted.", parent=self.root)
             except Exception as e:
                 messagebox.showerror("Error", f"An error occurred while deleting data: {e}", parent=self.root)
@@ -192,7 +198,7 @@ class FaceDatabaseApp:
         for widget in self.images_frame.winfo_children():
             widget.destroy()
 
-        cursor.execute('''
+        self.cursor.execute('''
             SELECT persons.id, persons.name, images.id, images.image 
             FROM persons 
             JOIN images ON persons.id = images.person_id
@@ -202,7 +208,7 @@ class FaceDatabaseApp:
         current_name = None
         image_row_frame = None
 
-        for record in cursor.fetchall():
+        for record in self.cursor.fetchall():
             person_id, name, image_id, image_data = record
 
             # new row for new name
@@ -253,51 +259,51 @@ class FaceDatabaseApp:
         
         if new_name:
             # find the current person_id and name associated with the image
-            cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-            current_person_id = cursor.fetchone()
+            self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+            current_person_id = self.cursor.fetchone()
             
             if current_person_id:
                 current_person_id = current_person_id[0]
-                cursor.execute('SELECT name FROM persons WHERE id = ?', (current_person_id,))
-                old_name = cursor.fetchone()[0]
+                self.cursor.execute('SELECT name FROM persons WHERE id = ?', (current_person_id,))
+                old_name = self.cursor.fetchone()[0]
             
                 # does person with the new name already exists?
-                cursor.execute('SELECT id FROM persons WHERE name = ?', (new_name,))
-                existing_person = cursor.fetchone()
+                self.cursor.execute('SELECT id FROM persons WHERE name = ?', (new_name,))
+                existing_person = self.cursor.fetchone()
             
                 if existing_person:
                     new_person_id = existing_person[0]
                     
                     # image count for this person
-                    cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (new_person_id,))
-                    image_count = cursor.fetchone()[0]
+                    self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (new_person_id,))
+                    image_count = self.cursor.fetchone()[0]
                     
                     if image_count >= 5:
                         messagebox.showerror("Error", "Cannot add more than 5 images to the same person.")
                         return
                     else:
                         # update the person_id for this image to the existing person - add image into existing
-                        cursor.execute('UPDATE images SET person_id = ? WHERE id = ?', (new_person_id, image_id))
-                        conn.commit()
+                        self.cursor.execute('UPDATE images SET person_id = ? WHERE id = ?', (new_person_id, image_id))
+                        self.conn.commit()
                         messagebox.showinfo("Success", f"Image added to existing person '{new_name}'.")
                         
                         # see if the old person_id has any remaining images and delete person is image count is 0
-                        cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (current_person_id,))
-                        remaining_images_count = cursor.fetchone()[0]
+                        self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (current_person_id,))
+                        remaining_images_count = self.cursor.fetchone()[0]
                         
                         if remaining_images_count == 0:
-                            cursor.execute('DELETE FROM persons WHERE id = ?', (current_person_id,))
-                            conn.commit()
+                            self.cursor.execute('DELETE FROM persons WHERE id = ?', (current_person_id,))
+                            self.conn.commit()
                             #uncomment for cleanup message
                             #messagebox.showinfo("Cleanup", f"Old name '{old_name}' removed from the database.")
                 else:
                     # update the person's name for this image's person - ?
-                    cursor.execute('''
+                    self.cursor.execute('''
                         UPDATE persons 
                         SET name = ? 
                         WHERE id = ?
                     ''', (new_name, current_person_id))
-                    conn.commit()
+                    self.conn.commit()
                     messagebox.showinfo("Success", "Name updated.")
             
             self.load_images()  # image refresh
@@ -308,8 +314,8 @@ class FaceDatabaseApp:
 
     def export_image(self, person_id):
         # find the person's name based on person_id
-        cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-        person_name = cursor.fetchone()
+        self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+        person_name = self.cursor.fetchone()
 
         if not person_name:
             messagebox.showwarning("No Person Found", "No person found with the specified ID.")
@@ -317,8 +323,8 @@ class FaceDatabaseApp:
     
         name = person_name[0].replace(" ", "_")  # no junk names please
         # find this persons images
-        cursor.execute('SELECT id, image FROM images WHERE person_id = ?', (person_id,))
-        images = cursor.fetchall()
+        self.cursor.execute('SELECT id, image FROM images WHERE person_id = ?', (person_id,))
+        images = self.cursor.fetchall()
         
         if not images:
             messagebox.showwarning("No Images", "No images found for this person.")
@@ -343,31 +349,31 @@ class FaceDatabaseApp:
     def delete_all(self, image_id):
         
         # find persons.id from images.id
-        cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-        person_id = cursor.fetchone()[0]
+        self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+        person_id = self.cursor.fetchone()[0]
         # now we have the persons.id lets find the name
-        cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-        person_name = cursor.fetchone()[0]
+        self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+        person_name = self.cursor.fetchone()[0]
         
         confirm = messagebox.askyesno(f"Confirm Deletion of {person_name}", f"Are you sure you want to delete {person_name} and all the associated images?")
         if confirm:
             # get the person associated with the image
-            cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-            person_id = cursor.fetchone()[0]
+            self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+            person_id = self.cursor.fetchone()[0]
             if person_id:
                 
                 # find persons.id from images.id
-                cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-                person_id = cursor.fetchone()[0]
+                self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+                person_id = self.cursor.fetchone()[0]
                 # now we have the persons.id lets find the name
-                cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-                person_name = cursor.fetchone()[0]
+                self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+                person_name = self.cursor.fetchone()[0]
                 
                 # delete this persons images from images
-                cursor.execute('DELETE FROM images WHERE person_id = ?', (person_id,))
+                self.cursor.execute('DELETE FROM images WHERE person_id = ?', (person_id,))
                 # delete this person from person
-                cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
-                conn.commit()
+                self.cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
+                self.conn.commit()
                 messagebox.showinfo("Success", f"{person_name} and all associated images were deleted.")
             else:
                 messagebox.showwarning("Error", "Failed to find the person associated with this image.")
@@ -401,8 +407,8 @@ class FaceDatabaseApp:
         image_frame.bind("<Configure>", lambda event: self.update_scroll_region(canvas))
         
         # gets this persons images
-        cursor.execute('SELECT id, image FROM images WHERE person_id = ?', (person_id,))
-        images = cursor.fetchall()
+        self.cursor.execute('SELECT id, image FROM images WHERE person_id = ?', (person_id,))
+        images = self.cursor.fetchall()
         
         # shows the images in a grid with 5 columns
         columns = 5
@@ -445,31 +451,31 @@ class FaceDatabaseApp:
 
         def confirm_delete_image(image_id):
             # find persons.id from images.id
-            cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-            person_id = cursor.fetchone()[0]
+            self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+            person_id = self.cursor.fetchone()[0]
             # now we have the persons.id lets find the name
-            cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-            person_name = cursor.fetchone()[0]
+            self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+            person_name = self.cursor.fetchone()[0]
             confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete this image from '{person_name}'?", parent=self.image_list_window)
             
             if confirm:
                 # find persons.id from images.id
-                cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-                person_id = cursor.fetchone()[0]
+                self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+                person_id = self.cursor.fetchone()[0]
                 # now we have the persons.id lets find the name
-                cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-                person_name = cursor.fetchone()[0]
+                self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+                person_name = self.cursor.fetchone()[0]
                 #delete image
-                cursor.execute('DELETE FROM images WHERE id = ?', (image_id,))
-                conn.commit()   
+                self.cursor.execute('DELETE FROM images WHERE id = ?', (image_id,))
+                self.conn.commit()   
                 # make sure this person have no more images because if so they will be deleted. 
-                cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
-                remaining_images_count = cursor.fetchone()[0]
+                self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
+                remaining_images_count = self.cursor.fetchone()[0]
                 
                 if remaining_images_count == 0:
                     # If no other images exist, delete the person
-                    cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
-                    conn.commit()
+                    self.cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
+                    self.conn.commit()
                     messagebox.showinfo("Person Deleted", f"The person '{person_name}' has been deleted because they have no more associated images.", parent=self.image_list_window)
                 else:
                     messagebox.showinfo("Success", f"Image deleted from '{person_name}'.", parent=self.image_list_window)
@@ -487,8 +493,8 @@ class FaceDatabaseApp:
     def confirm_delete_image(self, image_id):
         confirm = messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this image?")
         if confirm:
-            cursor.execute('DELETE FROM images WHERE id = ?', (image_id,))
-            conn.commit()
+            self.cursor.execute('DELETE FROM images WHERE id = ?', (image_id,))
+            self.conn.commit()
             messagebox.showinfo("Success", "Image deleted.")
             self.image_list_window.destroy()
             self.load_images()  # refresh images for the last time
@@ -496,8 +502,12 @@ class FaceDatabaseApp:
 
 
     def close_app(self):
-        conn.close()
-        self.root.destroy()
+        if not self.is_closed:  # Check if the app has already been closed
+            self.is_closed = True  # Set the flag to prevent re-entry
+            if self.conn:
+                self.conn.close()
+            if self.root and self.root.winfo_exists():  # Check if the window exists
+                self.root.destroy()
 
 
 

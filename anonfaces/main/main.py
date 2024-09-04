@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import argparse
 import json
 import mimetypes
@@ -21,16 +20,24 @@ from moviepy.editor import *
 from pedalboard import *
 from pedalboard.io import AudioFile
 from tqdm import tqdm
-from anonfaces import __version__
-from anonfaces.centerface import CenterFace
 import tkinter as tk
-from anonfaces.face_database_gui import FaceDatabaseApp
 import dlib
 import sqlite3
 import re
 from scipy.spatial import distance
 from tkinter import Tk
 from tkinter.filedialog import askdirectory
+
+
+from anonfaces import __version__
+from anonfaces.main.centerface import CenterFace
+from anonfaces.gui.dbfacegui import FaceDatabaseApp
+#from main import __version__               #to run as standalone uncomment these three
+#from main.centerface import CenterFace     #then comment the three above
+#from gui.dbfacegui import FaceDatabaseApp
+
+
+
 
 # Sends a signal to stop ffmpeg
 stop_ffmpeg = False
@@ -106,8 +113,20 @@ def draw_det(
 
 
 #dlib face detector and face recognition models
-shape_path = f'{os.path.dirname(__file__)}/shape_predictor_5_face_landmarks.dat'
-face_path = f'{os.path.dirname(__file__)}/dlib_face_recognition_resnet_model_v1.dat'
+#shape_path = f'{os.path.dirname(__file__)}/shape_predictor_5_face_landmarks.dat'
+shape_path = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    'database',
+    'shape_predictor_5_face_landmarks.dat'
+    )
+
+#face_path = f'{os.path.dirname(__file__)}/dlib_face_recognition_resnet_model_v1.dat'
+face_path = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    'database',
+    'dlib_face_recognition_resnet_model_v1.dat'
+    )
+
 detector = dlib.get_frontal_face_detector()
 sp = dlib.shape_predictor(shape_path)
 facerec = dlib.face_recognition_model_v1(face_path)
@@ -138,30 +157,35 @@ def load_reference_faces(reference_directory):
 
 
 # check if a detected face matches any reference face
-def is_known_face(face_descriptor, reference_face_descriptors, reference_names, threshold):
-    for ref_descriptor, ref_name in zip(reference_face_descriptors, reference_names):
+def is_known_face(face_descriptor, reference_face_descriptors, reference_names, reference_image_ids, threshold):
+    for ref_descriptor, ref_name, ref_id in zip(reference_face_descriptors, reference_names, reference_image_ids):
     #for ref_descriptor in reference_face_descriptors:
+        
+        #uncomment to verify multiple image checks per person via image id in sql.
+        #print(f"Checking against: {ref_name} - {ref_id}")
         dist = distance.euclidean(face_descriptor, ref_descriptor)
         if dist < threshold:
             return ref_name
     return None
 
 
-def load_reference_faces_from_db(db_path):
-    conn = sqlite3.connect(db_path)
+def load_reference_faces_from_db(database_path):
+    conn = sqlite3.connect(database_path)
     cursor = conn.cursor()
+    #print(f"Database path: {database_path}")
 
     # get all persons and their associated images
     cursor.execute('''
-        SELECT persons.name, images.image 
+        SELECT images.id, persons.name, images.image 
         FROM persons 
         JOIN images ON persons.id = images.person_id
     ''')
     
     reference_descriptors = []
     reference_names = []
+    reference_image_ids = []
 
-    for name, image_blob in cursor.fetchall():
+    for image_id, name, image_blob in cursor.fetchall():
         # convert sql BLOB back to an image
         img = np.frombuffer(image_blob, dtype=np.uint8)
         img = cv2.imdecode(img, cv2.IMREAD_COLOR)
@@ -175,18 +199,19 @@ def load_reference_faces_from_db(db_path):
             # first letter of first and last capitalized, remove all numbers
             cleaned_name = ' '.join([part.capitalize() for part in ''.join([i for i in name if not i.isdigit()]).split()])
             reference_names.append(cleaned_name)
+            reference_image_ids.append(image_id)
         else:
             tqdm.write(f"No face detected in {name}")
 
     conn.close()
-    return reference_descriptors, reference_names
+    return reference_descriptors, reference_names, reference_image_ids
 
 
 def anonymize_frame(
         dets, frame, mask_scale,
         replacewith, ellipse, draw_scores, replaceimg, mosaicsize,
         face_recog, fr_name,
-        reference_face_descriptors=None, reference_names=None, fr_thresh=0.60,
+        reference_face_descriptors=None, reference_names=None, reference_image_ids=None, fr_thresh=0.60,
 ):
     for i, det in enumerate(dets):
         boxes, score = det[:4], det[4]
@@ -213,7 +238,7 @@ def anonymize_frame(
                     #tqdm.write(f'face_descriptor.ndim: {face_descriptor.ndim}')
                 
                 # Check if the detected face is a known reference face
-                matched_name = is_known_face(face_descriptor, reference_face_descriptors, reference_names, threshold=fr_thresh)
+                matched_name = is_known_face(face_descriptor, reference_face_descriptors, reference_names, reference_image_ids, threshold=fr_thresh)
                 if matched_name:
                     if fr_name:
                         text_size = cv2.getTextSize(matched_name, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
@@ -262,6 +287,7 @@ def video_detect(
         face_recog: bool = False,  # Add face recog parameter from below
         reference_face_descriptors=None,
         reference_names=None,
+        reference_image_ids=None,
         fr_thresh=0.60,
         fr_name: bool = False
 ):
@@ -341,7 +367,7 @@ def video_detect(
             face_recog=face_recog,
             reference_face_descriptors=reference_face_descriptors,
             reference_names=reference_names, fr_thresh=fr_thresh,
-            fr_name=fr_name
+            fr_name=fr_name, reference_image_ids=reference_image_ids
         )
 
         if opath is not None:
@@ -427,6 +453,7 @@ def image_detect(
         face_recog: bool = False,  # Add face_recog parameter
         reference_face_descriptors=None,
         reference_names=None,
+        reference_image_ids=None,
         fr_thresh=0.60,
         fr_name: bool = False
 ):
@@ -448,7 +475,7 @@ def image_detect(
         face_recog=face_recog,
         reference_face_descriptors=reference_face_descriptors,
         reference_names=reference_names, fr_thresh=fr_thresh,
-        fr_name=fr_name
+        fr_name=fr_name, reference_image_ids=reference_image_ids
     )
 
     if enable_preview:
@@ -609,14 +636,20 @@ def parse_cli_args():
     if args.face_recog:
         root = tk.Tk()
         app = FaceDatabaseApp(root)
-        root.protocol("WM_DELETE_WINDOW", app.close_app)
-        root.mainloop()
+        try:
+            root.protocol("WM_DELETE_WINDOW", app.close_app)
+            root.mainloop()
+        finally:
+            app.close_app()
         
     if args.face_gui:     
         root = tk.Tk()
         app = FaceDatabaseApp(root)
-        root.protocol("WM_DELETE_WINDOW", app.close_app)
-        root.mainloop()
+        try:
+            root.protocol("WM_DELETE_WINDOW", app.close_app)
+            root.mainloop()
+        finally:
+            app.close_app()
         exit(1)
         
     # Automatically enable keep_audio if distort_audio is set
@@ -653,8 +686,12 @@ def main():
     
     # Directory only shows if face recog arg = on
     if args.face_recog:
-        db_path = f'{os.path.dirname(__file__)}/face_db.sqlite'
-        reference_face_descriptors, reference_names = load_reference_faces_from_db(db_path)
+        database_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'database',
+            'face_db.sqlite'
+        )
+        reference_face_descriptors, reference_names, reference_image_ids = load_reference_faces_from_db(database_path)
         #uncomment for local directory reference faces-leaving in here for a fallback later
         #will keep both but figure out the best way to handle the option.....
         #reference_directory = select_reference_directory()
@@ -751,6 +788,7 @@ def main():
                 face_recog=args.face_recog,  # Pass the face recog argument
                 reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
                 reference_names=reference_names if args.face_recog else None,  # Pass reference names
+                reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
                 fr_name=args.fr_name
             )
             if stop_ffmpeg:
@@ -780,6 +818,7 @@ def main():
                 face_recog=args.face_recog,  # Pass the face recog argument
                 reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
                 reference_names=reference_names if args.face_recog else None,  # Pass reference names
+                reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
                 fr_name= args.fr_name
             )
             if stop_ffmpeg:

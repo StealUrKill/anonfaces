@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anonfaces"
 version = "1.0.6RC"
-requires-python = "==3.11.*"
+requires-python = ">=3.10"
 description = "Video/Image anonymization by face detection with beta stage face recognition"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -36,7 +36,7 @@ openvino = ["onnxruntime-openvino==1.18.0", "openvino==2024.1.0"]
 
 [project.scripts]
 anonfaces = "anonfaces.anonfaces:main"
-cleanup = "anonfaces.cleanup:remove_database"
+faceclean = "anonfaces.helper.cleanup:remove_database"
 
 [tool.setuptools]
 packages = ["anonfaces"]
@@ -45,7 +45,8 @@ packages = ["anonfaces"]
 anonfaces = [
     "centerface.onnx",
     "shape_predictor_5_face_landmarks.dat",
-    "dlib_face_recognition_resnet_model_v1.dat"
+    "dlib_face_recognition_resnet_model_v1.dat",
+	"face_db.sqlite"
 ]
 
 [tool.setuptools_scm]

@@ -8,7 +8,7 @@ By default all audio tracks are removed, if kept they are encoded as mp3 (libmp3
 `Face Recognition has now been imbedded via DLIB and prebuilt DLIB models.`
 This is still a slow process and more optimization should help.
 Please see credits and usage example for more info.
-### You will need Visual Studio to build `DLIB` unless you use prebuilts - https://github.com/z-mahmud22/Dlib_Windows_Python3.x
+### You will need Visual Studio and CMake to build `DLIB` unless you use prebuilts - https://github.com/z-mahmud22/Dlib_Windows_Python3.x
 ### Install `DLIB` before installing `anonfaces`
 
 
