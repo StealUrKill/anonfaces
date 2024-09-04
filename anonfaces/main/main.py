@@ -282,8 +282,7 @@ def video_detect(
         mosaicsize: int = 20,
         #new below
         copy_acodec: bool = False,
-        show_ffmpeg_config: bool = False,
-        show_ffmpeg_command: bool = False,
+        info: bool = False,
         face_recog: bool = False,  # Add face recog parameter from below
         reference_face_descriptors=None,
         reference_names=None,
@@ -335,19 +334,26 @@ def video_detect(
         writer: imageio.plugins.ffmpeg.FfmpegFormat.Writer = imageio.get_writer(
             opath, format='FFMPEG', mode='I', **_ffmpeg_config
         )
-                
-        if show_ffmpeg_config:
-            tqdm.write(f'FFMPEG Config: {_ffmpeg_config}')
-            tqdm.write("")
-        if show_ffmpeg_command:
-            ffmpeg_command = (
-                f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} "
-                f"-i {_ffmpeg_config['audio_path']} "
-                f"-r {_ffmpeg_config['fps']} "
-                f"-c:v libx264 "
-                f"-c:a {_ffmpeg_config['audio_codec']} "
-                f"{opath}"
-            )
+        
+        if info:
+            # Construct the FFmpeg command only if audio_path is set
+            if 'audio_path' in _ffmpeg_config:
+                ffmpeg_command = (
+                    f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} "
+                    f"-i {ipath}"
+                    f"-r {_ffmpeg_config['fps']} "
+                    f"-c:v libx264 "
+                    f"-c:a {_ffmpeg_config['audio_codec']} "
+                    f"{opath}"
+                )
+            else:
+                ffmpeg_command = (
+                    f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} "
+                    f"-i {ipath}"
+                    f"-r {_ffmpeg_config['fps']} "
+                    f"-c:v libx264 "
+                    f"{opath}"
+                )
             tqdm.write(f"FFMPEG Command: {ffmpeg_command}")
             tqdm.write("")
 
@@ -592,17 +598,8 @@ def parse_cli_args():
         '--copy-acodec', '-ca', default=False, action='store_true',
         help='Keep audio codec from video source file.')
     parser.add_argument(
-        '--show-ffmpeg-config', '-config', action='store_true', default=False,
-        help='Shows the FFmpeg config arguments string.')
-    parser.add_argument(
-        '--show-ffmpeg-command', '-command', action='store_true', default=False,
-        help='Shows the FFmpeg constructed command used for processing the video. Helpful for troublshooting.')
-    parser.add_argument(
-        '--show-both', '-both', action='store_true', default=False,
-        help='Shows both --show-ffmpeg-command & --show-ffmpeg-config')
-    parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
-        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.')  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
+        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10}"')  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
     parser.add_argument(
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
@@ -611,7 +608,7 @@ def parse_cli_args():
         help='Override onnxrt execution provider (see https://onnxruntime.ai/docs/execution-providers/). If not specified, the presumably fastest available one will be automatically selected. Only used if backend is onnxrt.')
     parser.add_argument(
         '--info', default=False, action="store_true",
-        help='Shows file input/output location. Default is off the clear clutter.')
+        help='Shows file input/output location and ffmpeg command. Default is off the clear clutter.')
     parser.add_argument(
         '--version', action='version', version=__version__,
         help='Print version number and exit.')
@@ -624,10 +621,6 @@ def parse_cli_args():
         help="Enables face recognition, names from image names, preview, draw scores, and keep audio.")
     
     args = parser.parse_args()
-
-    if args.show_both:
-        args.show_ffmpeg_command = True
-        args.show_ffmpeg_config = True
     
     if args.frn:
         args.face_recog = True
@@ -728,8 +721,6 @@ def main():
     #new below
     copy_acodec = args.copy_acodec
     info = args.info
-    show_ffmpeg_config = args.show_ffmpeg_config
-    show_ffmpeg_command = args.show_ffmpeg_command
     fr_name = args.fr_name
     if in_shape is not None:
         w, h = in_shape.split('x')
@@ -782,8 +773,7 @@ def main():
                 mosaicsize=mosaicsize,
                 #new below
                 copy_acodec=copy_acodec,
-                show_ffmpeg_config=show_ffmpeg_config,
-                show_ffmpeg_command=show_ffmpeg_command,
+                info=info,
                 fr_thresh=args.fr_thresh,
                 face_recog=args.face_recog,  # Pass the face recog argument
                 reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
