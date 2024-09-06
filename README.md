@@ -11,6 +11,11 @@ Please see credits and usage example for more info.
 ### You will need Visual Studio and CMake to build `DLIB` unless you use prebuilts - https://github.com/z-mahmud22/Dlib_Windows_Python3.x
 ### Install `DLIB` before installing `anonfaces`
 
+### GUI is now included. This is beta stage at this moment.
+You can still run anonfaces in command-line and you can access the gui via `anonfaces gui` from the command line.
+You can also create a desktop shortcut in windows using the same above and set as minimized. This will run the gui always.
+The face database gui can also be ran via `anonfaces dbgui` and this will run the face database.
+The main gui can also open the face database gui from a button on the app.
 
 
 Original frame | `anonfaces` output (using default options)
@@ -20,7 +25,10 @@ Original frame | `anonfaces` output (using default options)
 
 ## Installation
 
-`anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), but it requires using a command-line shell such as bash. Currently there is a GUI but its written in c# for .net-framework, possibly release/inclusion.
+`anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), can be either GUI or by using a command-line shell such as bash.
+Requires tkinter to be installed to run either command-line or gui. Windows installs by default. The GUI scale is off some, but functions fine.
+
+	sudo apt install python3-tk
 
 Release Candidate only supports this revision directly from GitHub, from which you can run:
 
@@ -66,72 +74,93 @@ To get an overview of usage and available options, run:
 The output may vary depending on your installed version, but it should look similar to this:
 
 ```
-usage: anonfaces [--output O] [--thresh T] [--scale WxH] [--preview] [--boxes]
-              [--draw-scores] [--mask-scale M]
-              [--replacewith {blur,solid,none,img,mosaic}]
-              [--replaceimg REPLACEIMG] [--mosaicsize width] [--keep-audio]
-              [--ffmpeg-config FFMPEG_CONFIG] [--backend {auto,onnxrt,opencv}]
-              [--execution-provider EP] [--version] [--help]
-              [input ...]
+usage: anonfaces [--output O] [--thresh T] [--scale WxH] [--preview] [--boxes] 
+                 [--draw-scores] [--mask-scale M] [--replacewith {blur,solid,
+                 none,img,mosaic}] [--replaceimg REPLACEIMG] [--mosaicsize 
+                 width] [--face-recog] [--fr-name] [--face-gui] [--frn] 
+                 [--fr-thresh FR_THRESH] [--distort-audio] [--keep-audio] 
+                 [--copy-acodec] [--ffmpeg-config FFMPEG_CONFIG] 
+                 [--backend {auto,onnxrt,opencv}] 
+                 [--execution-provider EP] [--info] [--version] 
+                 [--keep-metadata] [--help] [--all]
+                 [input ...]
 
-Video anonymization by face detection
+Video/Image anonymization by face detection with beta stage face recognition
 
 positional arguments:
-  input                 File path(s) or camera device name. It is possible to
-                        pass multiple paths by separating them by spaces or by
-                        using shell expansion (e.g. `$ anonfaces vids/*.mp4`).
-                        Alternatively, you can pass a directory as an input,
-                        in which case all files in the directory will be used
-                        as inputs. If a camera is installed, a live webcam
-                        demo can be started by running `$ anonfaces cam` (which
-                        is a shortcut for `$ anonfaces -p '<video0>'`.
+  input                 File path(s) or camera device name. It is possible to 
+                        pass multiple paths by separating them by spaces or by 
+                        using shell expansion (e.g. `$ anonfaces vids/*.mp4`). 
+                        Alternatively, you can pass a directory as an input, in 
+                        which case all files in the directory will be used as 
+                        inputs. If a camera is installed, a live webcam demo 
+                        can be started by running `$ anonfaces cam` (which is a 
+                        shortcut for `$ anonfaces -p '<video0>'`.
 
 optional arguments:
-  --output O, -o O      Output file name. Defaults to input path + postfix
-                        "_anon".
-  --thresh T, -t T      Detection threshold (tune this to trade off between
+  --output O, -o O      Output file name. Defaults to input path + postfix 
+                        "_anonymized".
+  --thresh T, -t T      Detection threshold (tune this to trade off between 
                         false positive and false negative rate). Default: 0.2.
-  --scale WxH, -s WxH   Downscale images for network inference to this size
+  --scale WxH, -s WxH   Downscale images for network inference to this size 
                         (format: WxH, example: --scale 640x360).
   --preview, -p         Enable live preview GUI (can decrease performance).
   --boxes               Use boxes instead of ellipse masks.
-  --draw-scores         Draw detection scores onto outputs.
-  --mask-scale M        Scale factor for face masks, to make sure that masks
+  --draw-scores, -ds    Draw detection scores onto outputs.
+  --mask-scale M        Scale factor for face masks, to make sure that masks 
                         cover the complete face. Default: 1.3.
   --replacewith {blur,solid,none,img,mosaic}
-                        Anonymization filter mode for face regions. "blur"
-                        applies a strong gaussian blurring, "solid" draws a
-                        solid black box, "none" does leaves the input
-                        unchanged, "img" replaces the face with a custom image
-                        and "mosaic" replaces the face with mosaic. Default:
+                        Anonymization filter mode for face regions. "blur" 
+                        applies a strong gaussian blurring, "solid" draws a 
+                        solid black box, "none" leaves the input unchanged, 
+                        "img" replaces the face with a custom image, and 
+                        "mosaic" replaces the face with mosaic. Default: 
                         "blur".
   --replaceimg REPLACEIMG
-                        Anonymization image for face regions. Requires
+                        Anonymization image for face regions. Requires 
                         --replacewith img option.
-  --mosaicsize width    Setting the mosaic size. Requires --replacewith mosaic
+  --mosaicsize width    Setting the mosaic size. Requires --replacewith mosaic 
                         option. Default: 20.
-  --distort-audio       Enable audio distortion for the output video.
-                        Applies pitch shift and gain effects to the audio.
-  --keep-audio, -k      Keep audio from video source file and copy it over to
+  --face-recog, -fr     Enable face recognition to not blur faces in Face GUI 
+                        Database.
+  --fr-name, -name      Enable face recognition names from image name in Face 
+                        GUI Database.
+  --face-gui, -fg       Launch the face database GUI without running face 
+                        recognition.
+  --frn, -frn           Enable both face recognition and name labeling from 
+                        image names.
+  --fr-thresh FR_THRESH, -ft FR_THRESH
+                        Set the face recognition threshold. Default is 0.60 and 
+                        seems standard. More testing needed.
+  --distort-audio, -da  Enable audio distortion for the output video (applies 
+                        pitch shift and gain effects to the audio). This 
+                        automatically applies --keep-audio but will not work 
+                        with --copy-acodec due to MoviePy.
+  --keep-audio, -k      Keep audio from video source file and copy it over to 
                         the output (only applies to videos).
-  --copy-acodec, -ca	Keep the audio codec from video source file.
+  --copy-acodec, -ca    Keep audio codec from video source file.
   --ffmpeg-config FFMPEG_CONFIG
-                        FFMPEG config arguments for encoding output videos.
-                        This argument is expected in JSON notation. For a list
-                        of possible options, refer to the ffmpeg-imageio docs.
-                        Default: '{"codec": "libx264"}'.
+                        FFMPEG config arguments for encoding output videos. 
+                        This argument is expected in JSON notation. For a list 
+                        of possible options, refer to the ffmpeg-imageio docs. 
+                        Default: '{"codec": "libx264"}'. Windows example 
+                        --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}".
   --backend {auto,onnxrt,opencv}
-                        Backend for ONNX model execution. Default: "auto"
+                        Backend for ONNX model execution. Default: "auto" 
                         (prefer onnxrt if available).
-  --execution-provider EP, --ep EP
-                        Override onnxrt execution provider (see
-                        https://onnxruntime.ai/docs/execution-providers/). If
-                        not specified, the presumably fastest available one
-                        will be automatically selected. Only used if backend is
+  --execution-provider EP, -ep EP
+                        Override onnxrt execution provider (see 
+                        https://onnxruntime.ai/docs/execution-providers/). If 
+                        not specified, the presumably fastest available one 
+                        will be automatically selected. Only used if backend is 
                         onnxrt.
-  --keep-metadata, -m   Keeps the original image metadata in place after blurring.
+  --info                Shows file input/output location and ffmpeg command. 
+                        Default is off to clear clutter.
   --version             Print version number and exit.
+  --keep-metadata, -m   Keep metadata of the original image. Default: False.
   --help, -h            Show this help message and exit.
+  --all, -all           Enables face recognition, names from image names, 
+                        preview, draw scores, and keep audio.
 ```
 
 ## Usage examples

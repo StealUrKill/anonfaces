@@ -5,11 +5,9 @@ import mimetypes
 import os
 from typing import Dict, Tuple
 import shutil
-import tqdm
 import skimage.draw
 import numpy as np
 import imageio
-import imageio.v2 as iio
 import imageio_ffmpeg as ffmpeg
 import imageio.plugins.ffmpeg
 import cv2
@@ -21,7 +19,6 @@ from pedalboard import *
 from pedalboard.io import AudioFile
 from tqdm import tqdm
 import tkinter as tk
-import dlib
 import sqlite3
 import re
 from scipy.spatial import distance
@@ -112,28 +109,29 @@ def draw_det(
         )
 
 
-#dlib face detector and face recognition models
-#shape_path = f'{os.path.dirname(__file__)}/shape_predictor_5_face_landmarks.dat'
-shape_path = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    'database',
-    'shape_predictor_5_face_landmarks.dat'
-    )
+def load_dlib_params():
+    #dlib face detector and face recognition models
 
-#face_path = f'{os.path.dirname(__file__)}/dlib_face_recognition_resnet_model_v1.dat'
-face_path = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    'database',
-    'dlib_face_recognition_resnet_model_v1.dat'
-    )
+    shape_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        'database',
+        'shape_predictor_5_face_landmarks.dat'
+        )
 
-detector = dlib.get_frontal_face_detector()
-sp = dlib.shape_predictor(shape_path)
-facerec = dlib.face_recognition_model_v1(face_path)
+    face_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        'database',
+        'dlib_face_recognition_resnet_model_v1.dat'
+        )
+    import dlib
+    detector = dlib.get_frontal_face_detector()
+    sp = dlib.shape_predictor(shape_path)
+    facerec = dlib.face_recognition_model_v1(face_path)
+    return detector, sp, facerec
 
 
 #leaving here to fallback to directory loading faces
-def load_reference_faces(reference_directory):
+def load_reference_faces(reference_directory, detector, sp, facerec):
     reference_descriptors = []
     reference_names = []
     for file_name in os.listdir(reference_directory):
@@ -169,7 +167,7 @@ def is_known_face(face_descriptor, reference_face_descriptors, reference_names, 
     return None
 
 
-def load_reference_faces_from_db(database_path):
+def load_reference_faces_from_db(database_path, detector, sp, facerec):
     conn = sqlite3.connect(database_path)
     cursor = conn.cursor()
     #print(f"Database path: {database_path}")
@@ -210,7 +208,7 @@ def load_reference_faces_from_db(database_path):
 def anonymize_frame(
         dets, frame, mask_scale,
         replacewith, ellipse, draw_scores, replaceimg, mosaicsize,
-        face_recog, fr_name,
+        face_recog, fr_name, detector, sp, facerec,
         reference_face_descriptors=None, reference_names=None, reference_image_ids=None, fr_thresh=0.60,
 ):
     for i, det in enumerate(dets):
@@ -288,7 +286,8 @@ def video_detect(
         reference_names=None,
         reference_image_ids=None,
         fr_thresh=0.60,
-        fr_name: bool = False
+        fr_name: bool = False,
+        detector=None, sp=None, facerec=None
 ):
     try:
         if 'fps' in ffmpeg_config:
@@ -331,29 +330,40 @@ def video_detect(
         if copy_acodec and meta.get('audio_codec'): #use "copy" codec off by default but copies direct audio codec
             _ffmpeg_config.setdefault('audio_path', ipath)
             _ffmpeg_config.setdefault('audio_codec', 'copy')
+        codec = _ffmpeg_config.get('codec', 'libx264')
+        fps = _ffmpeg_config.get('fps', None)
+        bitrate = _ffmpeg_config.get('bitrate', None)
+        audio_codec = _ffmpeg_config.get('audio_codec', None)
+        audio_bitrate = _ffmpeg_config.get('audio_bitrate', None)
+        pix_fmt = _ffmpeg_config.get('pix_fmt', None)
+        sample_rate = _ffmpeg_config.get('sample_rate', None)
         writer: imageio.plugins.ffmpeg.FfmpegFormat.Writer = imageio.get_writer(
             opath, format='FFMPEG', mode='I', **_ffmpeg_config
         )
-        
+        #work in progess due to possible missing params
         if info:
-            # Construct the FFmpeg command only if audio_path is set
-            if 'audio_path' in _ffmpeg_config:
-                ffmpeg_command = (
-                    f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} "
-                    f"-i {ipath}"
-                    f"-r {_ffmpeg_config['fps']} "
-                    f"-c:v libx264 "
-                    f"-c:a {_ffmpeg_config['audio_codec']} "
-                    f"{opath}"
-                )
-            else:
-                ffmpeg_command = (
-                    f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} "
-                    f"-i {ipath}"
-                    f"-r {_ffmpeg_config['fps']} "
-                    f"-c:v libx264 "
-                    f"{opath}"
-                )
+            ffmpeg_command = f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} -i {ipath} "
+    
+            if fps:
+                ffmpeg_command += f"-r {fps} "
+            if bitrate:
+                ffmpeg_command += f"-b:v {bitrate} "
+            if pix_fmt:
+                ffmpeg_command += f"-pix_fmt {pix_fmt} "
+    
+            # Add video codec
+            ffmpeg_command += f"-c:v {codec} "
+    
+            # If audio is specified
+            if audio_codec:
+                ffmpeg_command += f"-c:a {audio_codec} "
+                if audio_bitrate:
+                    ffmpeg_command += f"-b:a {audio_bitrate} "
+                if sample_rate:
+                    ffmpeg_command += f"-ar {sample_rate} "
+    
+            ffmpeg_command += f"{opath}"
+            
             tqdm.write(f"FFMPEG Command: {ffmpeg_command}")
             tqdm.write("")
 
@@ -373,7 +383,8 @@ def video_detect(
             face_recog=face_recog,
             reference_face_descriptors=reference_face_descriptors,
             reference_names=reference_names, fr_thresh=fr_thresh,
-            fr_name=fr_name, reference_image_ids=reference_image_ids
+            fr_name=fr_name, reference_image_ids=reference_image_ids,
+            detector=detector, sp=sp, facerec=facerec
         )
 
         if opath is not None:
@@ -461,7 +472,8 @@ def image_detect(
         reference_names=None,
         reference_image_ids=None,
         fr_thresh=0.60,
-        fr_name: bool = False
+        fr_name: bool = False,
+        detector=None, sp=None, facerec=None
 ):
     frame = imageio.imread(ipath)
     
@@ -481,7 +493,8 @@ def image_detect(
         face_recog=face_recog,
         reference_face_descriptors=reference_face_descriptors,
         reference_names=reference_names, fr_thresh=fr_thresh,
-        fr_name=fr_name, reference_image_ids=reference_image_ids
+        fr_name=fr_name, reference_image_ids=reference_image_ids,
+        detector=detector, sp=sp, facerec=facerec
     )
 
     if enable_preview:
@@ -575,10 +588,10 @@ def parse_cli_args():
         help='Setting the mosaic size. Requires --replacewith mosaic option. Default: 20.')
     parser.add_argument(
         '--face-recog', '-fr', default=False, action='store_true',
-        help="Enable face recognition and the program will ask for a directory of reference faces to not blur")
+        help="Enable face recognition to not blur faces in Face GUI Database.")
     parser.add_argument(
         '--fr-name', '-name', default=False, action='store_true',
-        help="Enable face recognition names from image name (example: 'John Doe.jpg'}).")    
+        help="Enable face recognition names from image name in Face GUI Database.")    
     parser.add_argument(
         '--face-gui', '-fg', default=False, action='store_true',
         help="Launch the face database GUI without running face recognition.")
@@ -599,7 +612,7 @@ def parse_cli_args():
         help='Keep audio codec from video source file.')
     parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
-        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10}"')  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
+        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10, \\"bitrate\\": \\"1000k\\"}"')  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
     parser.add_argument(
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
@@ -679,18 +692,19 @@ def main():
     
     # Directory only shows if face recog arg = on
     if args.face_recog:
+        detector, sp, facerec = load_dlib_params()
         database_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             'database',
             'face_db.sqlite'
         )
-        reference_face_descriptors, reference_names, reference_image_ids = load_reference_faces_from_db(database_path)
+        reference_face_descriptors, reference_names, reference_image_ids = load_reference_faces_from_db(database_path, detector, sp, facerec)
         #uncomment for local directory reference faces-leaving in here for a fallback later
         #will keep both but figure out the best way to handle the option.....
         #reference_directory = select_reference_directory()
         #reference_face_descriptors, reference_names = load_reference_faces(reference_directory)
     else:
-        reference_face_descriptors, reference_names = [], []
+        reference_face_descriptors, reference_names, reference_image_ids = [], [], []
     
     # add files in folders
     for path in args.input:
@@ -779,16 +793,19 @@ def main():
                 reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
                 reference_names=reference_names if args.face_recog else None,  # Pass reference names
                 reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
-                fr_name=args.fr_name
+                fr_name=args.fr_name,
+                detector=detector if args.face_recog else None,
+                sp=sp if args.face_recog else None,
+                facerec=facerec if args.face_recog else None
             )
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - second loop
             # Check if args.distort_audio is allowed
-            if args.distort_audio:
-                tqdm.write("Distorting audio for the video...")
-                distort_now(ipath, opath)
-            else:
-                tqdm.write("Skipping audio distortion.")
+            if args.keep_audio or args.copy_acodec:
+                if args.distort_audio:
+                    tqdm.write("")
+                    tqdm.write("Distorting audio for the video...")
+                    distort_now(ipath, opath)
         elif filetype == 'image':
             image_detect(
                 ipath=ipath,
@@ -809,7 +826,10 @@ def main():
                 reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
                 reference_names=reference_names if args.face_recog else None,  # Pass reference names
                 reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
-                fr_name= args.fr_name
+                fr_name= args.fr_name,
+                detector=detector if args.face_recog else None,
+                sp=sp if args.face_recog else None,
+                facerec=facerec if args.face_recog else None
             )
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - third loop
