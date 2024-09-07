@@ -810,30 +810,37 @@ def main():
                     tqdm.write("Distorting audio for the video...")
                     distort_now(ipath, opath)
         elif filetype == 'image':
-            image_detect(
-                ipath=ipath,
-                opath=opath,
-                centerface=centerface,
-                threshold=threshold,
-                replacewith=replacewith,
-                mask_scale=mask_scale,
-                ellipse=ellipse,
-                draw_scores=draw_scores,
-                enable_preview=enable_preview,
-                keep_metadata=keep_metadata,
-                replaceimg=replaceimg,
-                mosaicsize=mosaicsize,
-                #new below
-                fr_thresh=args.fr_thresh,
-                face_recog=args.face_recog,  # Pass the face recog argument
-                reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
-                reference_names=reference_names if args.face_recog else None,  # Pass reference names
-                reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
-                fr_name= args.fr_name,
-                detector=detector if args.face_recog else None,
-                sp=sp if args.face_recog else None,
-                facerec=facerec if args.face_recog else None
-            )
+            valid_image_ext = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']
+            _, ext = os.path.splitext(ipath)
+            ext = ext.lower()
+            # check if the file extension is valid for images due to heic images causing issue. may add a converter in as an arg.
+            if ext in valid_image_ext:
+                image_detect(
+                    ipath=ipath,
+                    opath=opath,
+                    centerface=centerface,
+                    threshold=threshold,
+                    replacewith=replacewith,
+                    mask_scale=mask_scale,
+                    ellipse=ellipse,
+                    draw_scores=draw_scores,
+                    enable_preview=enable_preview,
+                    keep_metadata=keep_metadata,
+                    replaceimg=replaceimg,
+                    mosaicsize=mosaicsize,
+                    #new below
+                    fr_thresh=args.fr_thresh,
+                    face_recog=args.face_recog,  # Pass the face recog argument
+                    reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
+                    reference_names=reference_names if args.face_recog else None,  # Pass reference names
+                    reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
+                    fr_name= args.fr_name,
+                    detector=detector if args.face_recog else None,
+                    sp=sp if args.face_recog else None,
+                    facerec=facerec if args.face_recog else None
+                )
+            else:
+                tqdm.write(f'File {ipath} has an unsupported image format {ext}. Skipping...')
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - third loop
         elif filetype is None:
