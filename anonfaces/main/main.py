@@ -475,7 +475,7 @@ def image_detect(
         fr_name: bool = False,
         detector=None, sp=None, facerec=None
 ):
-    frame = imageio.imread(ipath)
+    frame = imageio.v3.imread(ipath)
     
     if keep_metadata:
         # Source image EXIF metadata retrieval via imageio V3 lib
@@ -504,9 +504,12 @@ def image_detect(
 
     imageio.imsave(opath, frame)
     
-    if keep_metadata:
-        # Save image with EXIF metadata
+    # save the image/s with or without EXIF metadata based on its availability due to error with exif=None
+    # this is due to PIL (used by imageio for saving JPEG images) trying to access the len() of exif, but exif is None
+    if keep_metadata and exif_dict:
         imageio.imsave(opath, frame, exif=exif_dict)
+    else:
+        imageio.imsave(opath, frame)
 
     #tqdm.write(f'Output saved to {opath}')
 
