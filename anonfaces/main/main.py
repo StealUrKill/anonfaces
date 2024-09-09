@@ -43,9 +43,9 @@ stop_ffmpeg = False
 def signal_handler(signum, frame):
     global stop_ffmpeg
     stop_ffmpeg = True
-    tqdm.write(f"")
-    tqdm.write("Stop signal received, stopping cleanly...")
-    tqdm.write(f"")
+    #tqdm.write(f"")
+    #tqdm.write("Stop signal received, stopping cleanly...")
+    #tqdm.write(f"")
 
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -370,6 +370,13 @@ def video_detect(
     for frame in read_iter:
         #signal flag during ffmpeg video_detect
         if stop_ffmpeg:
+            bar.close()
+            reader.close()
+            if opath is not None:
+                writer.close()
+            tqdm.write(f"")
+            tqdm.write("Stop signal received, stopping cleanly...")
+            tqdm.write(f"")
             return
         
         # Perform network inference, get bb dets but discard landmark predictions
