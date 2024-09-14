@@ -1,0 +1,17 @@
+#######################################################################
+NOT INCLUDING WGET.EXE AS A FALLBACK FOR INSTANCES THAT CANT USE WINGET
+DOWNLOAD A COPY AND PLACE IN THE SAME DIRECTORY AS THESE TWO BAT FILES
+IF YOU DO NOT HAVE WINGET IN PATH ON YOUR SYSTEM
+
+This will need to be ran as Administrator to function correctly
+It will have menu prompts to guide you
+
+
+
+
+Known Issues
+onnxruntime-openvino is not available on python 3.12 as of yet
+manually install 3.11 first then you can run this if needed
+
+
+######################################################################

@@ -1,0 +1,12 @@
+####################################################
+
+BUILT USING - 
+
+CMake Version: 3.30.3
+Compiler: MSVC 19.41.34120.0 (Visual Studio 2022)
+SSE4 and AVX: Enabled
+FFMPEG: Disabled
+CUDA: Disabled
+JPEG XL: Disabled (PkgConfig not found)
+Threads: Enabled
+Python: 3.12.6
