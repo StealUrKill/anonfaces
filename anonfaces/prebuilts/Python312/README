@@ -1,0 +1,22 @@
+##########################################################################################################
+
+ALL CUDA DLIBS BUILT WITH CUDA 12.6 AND CUDNN 9.4
+THEY LOOK FOR LIB FILES IN SPECIFIC DIRECTORIES
+THEY SHOULD BE ABLE TO BE CHANGED FROM V9.4 TO ANY 9.X
+AND THEY SHOULD BE ABLE TO BE CHANGED FROM V12.6 TO ANY 12.X
+
+
+IN THE DIRECTORY HERE
+%localappdata%\Programs\Python\Python311\Lib\site-packages\dlib
+
+
+EDIT THE __init__.py TO THE NEW/EXACT LOCATIONS THAT MATCHES YOUR VERSION WITHIN 12.X AND 9.X
+
+
+if 'ON' == 'ON':
+    add_lib_to_dll_path('C:/Program Files/NVIDIA/CUDNN/v9.4/lib/cudnn.lib')
+    add_lib_to_dll_path('C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/lib/x64/cudart.lib')
+	
+	
+
+THIS WILL NOT WORK WITH 11.X AS FAR AS I KNOW. PREBUILTS FOR THOSE WILL COME SOON

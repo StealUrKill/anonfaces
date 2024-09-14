@@ -1,0 +1,82 @@
+####################################################
+SYSTEM 1 TEST:
+CPU: i7-13700
+RAM: 16GB 3600 MT/S
+GPU: RTX 4060
+SSD: 870 EVO 250GB
+OS Name: Microsoft Windows 11 Home
+OS Version: 10.0.22631 N/A Build 22631
+PYTHON VERSION: 3.11.9
+CUDA TOOLKIT: 12.6.1
+CUDNN: 9.4
+TENSORRT: 10.4.0.26
+EXECUTION PROVIDER: CUDA
+DLIB: INTEL MKL/CUDA
+
+SYSTEM 1 TEST VIDEO SPEEDS WITH FACE RECOGNITION:
+SCALED: 1280x720
+Codec: H264 - MPEG-4 AVC (part 10) (avc1)
+Video resolution: 1920x1080
+Frame rate: 29.970030
+Color primaries: ITU-R BT.709
+IT/S: ~7.01
+
+####################################################
+SYSTEM 2 TEST:
+CPU: i7-10900K
+RAM: 32GB 3000 MT/S
+GPU: RTX 3070
+SSD: 970 PRO 512GB
+OS Name: Microsoft Windows 11 Home
+OS Version: 10.0.22631 N/A Build 22631
+PYTHON VERSION: 3.11.9
+CUDA TOOLKIT: 12.6.1
+CUDNN: 9.3
+TENSORRT: 10.3.0.26
+EXECUTION PROVIDER: CUDA
+DLIB: INTEL MKL/CUDA
+
+SYSTEM 2 TEST VIDEO SPEEDS WITH FACE RECOGNITION:
+SCALED: 1280x720
+Codec: H264 - MPEG-4 AVC (part 10) (avc1)
+Video resolution: 1920x1080
+Frame rate: 29.970030
+Color primaries: ITU-R BT.709
+IT/S: ~6.59
+
+####################################################
+SYSTEM 3 TEST:
+CPU: i7-12700K
+RAM: 32GB 3600 MT/S
+GPU: RTX 2070
+SSD: 980 PRO 1TB
+OS Name: Microsoft Windows 11 Pro
+OS Version: 10.0.22631 N/A Build 22631
+PYTHON VERSION: 3.11.9
+CUDA TOOLKIT: 12.6.1
+CUDNN: 9.4
+TENSORRT: 10.4.0.26
+EXECUTION PROVIDER: CUDA
+DLIB: INTEL MKL/CUDA
+
+SYSTEM 3 TEST VIDEO SPEEDS WITH FACE RECOGNITION:
+SCALED: 1280x720
+Codec: H264 - MPEG-4 AVC (part 10) (avc1)
+Video resolution: 1920x1080
+Frame rate: 29.970030
+Color primaries: ITU-R BT.709
+IT/S: ~6.97
+
+####################################################
+
+BUILT USING - 
+
+CMake Version: 3.30.3
+Compiler: MSVC 19.41.34120.0 (Visual Studio 2022)
+SSE4 and AVX: Enabled
+FFMPEG: Disabled
+CUDA: Enabled (CUDA v12.6, cuDNN v9.4)
+JPEG XL: Disabled (PkgConfig not found)
+Intel MKL (BLAS/LAPACK): Enabled
+Threads: Enabled
+Python: 3.11.9
