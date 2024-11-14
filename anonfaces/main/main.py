@@ -12,6 +12,7 @@ import imageio_ffmpeg as ffmpeg
 import imageio.plugins.ffmpeg
 import cv2
 import sys
+import math
 import signal
 import platform
 from moviepy.editor import *
@@ -309,10 +310,19 @@ def video_detect(
         read_iter = cam_read_iter(reader)
     else:
         read_iter = reader.iter_data()
-        if platform.system() == "Darwin":
-            nframes = None  # Frame counting fails on macOS - do not have a mac to test - someone? anyone?
-        else:
-            nframes = reader.count_frames()
+        try:
+            if platform.system() != "Darwin":
+                total_frames = reader.count_frames()
+                original_fps = meta.get('fps', 30)  # Default to 30 FPS if not provided
+                specified_fps = ffmpeg_config.get('fps', original_fps)
+    
+                # Calculate adjusted total frames based on specified FPS
+                nframes = math.ceil(total_frames * (specified_fps / original_fps))        
+            else:    
+                nframes = None  # Frame counting fails on macOS - do not have a mac to test - someone? anyone?
+        except:
+            nframes = None # Fallback if counting frames fail
+    # Now intialize the progress bars with the adjusted nframes
     if nested:
         bar = tqdm(dynamic_ncols=True, total=nframes, position=1, leave=True)
     else:
