@@ -2,12 +2,11 @@ import os
 import platform
 from functools import lru_cache
 
-import numpy as np
 import cv2
-
+import numpy as np
 
 # Find file relative to the location of this code files
-default_onnx_path = f'{os.path.dirname(__file__)}/centerface.onnx'
+default_onnx_path = f"{os.path.dirname(__file__)}/centerface.onnx"
 
 
 def ensure_rgb(img: np.ndarray) -> np.ndarray:
@@ -20,29 +19,29 @@ def ensure_rgb(img: np.ndarray) -> np.ndarray:
 
 
 class CenterFace:
-    def __init__(self, onnx_path=None, in_shape=None, backend='auto', override_execution_provider=None):
+    def __init__(self, onnx_path=None, in_shape=None, backend="auto", override_execution_provider=None):
         self.in_shape = in_shape
-        self.onnx_input_name = 'input.1'
-        self.onnx_output_names = ['537', '538', '539', '540']
+        self.onnx_input_name = "input.1"
+        self.onnx_output_names = ["537", "538", "539", "540"]
 
         if onnx_path is None:
             onnx_path = default_onnx_path
 
-        if backend == 'auto':
+        if backend == "auto":
             try:
                 import onnx
                 import onnxruntime
-                backend = 'onnxrt'
+
+                backend = "onnxrt"
             except:
                 # TODO: Warn when using a --verbose flag
                 # print('Failed to import onnx or onnxruntime. Falling back to slower OpenCV backend.')
-                backend = 'opencv'
+                backend = "opencv"
         self.backend = backend
 
-
-        if self.backend == 'opencv':
+        if self.backend == "opencv":
             self.net = cv2.dnn.readNetFromONNX(onnx_path)
-        elif self.backend == 'onnxrt':
+        elif self.backend == "onnxrt":
             import onnx
             import onnxruntime
 
@@ -58,27 +57,33 @@ class CenterFace:
             #  CPUExecutionProvider as the last choice).
             #  In normal conditions, overriding this choice won't be necessary.
             available_providers = onnxruntime.get_available_providers()
+            available_providers = [
+                provider for provider in available_providers if provider != "TensorrtExecutionProvider"
+            ]
             if override_execution_provider is None:
                 ort_providers = available_providers
             else:
                 if override_execution_provider not in available_providers:
-                    raise ValueError(f'{override_execution_provider=} not found. Available providers are: {available_providers}')
+                    raise ValueError(
+                        f"{override_execution_provider=} not found. Available providers are: {available_providers}"
+                    )
                 ort_providers = [override_execution_provider]
 
             # Check if OpenVINO is selected automatically or explicitly
-            if platform.system() == "Windows" and any('openvino' in provider.lower() for provider in ort_providers):
+            if platform.system() == "Windows" and any("openvino" in provider.lower() for provider in ort_providers):
                 try:
                     import onnxruntime.tools.add_openvino_win_libs as utils
+
                     utils.add_openvino_libs_to_path()
                 except Exception as e:
                     raise RuntimeError(f"Failed to add OpenVINO libraries to the path. Error: {e}")
-            
+
             self.sess = onnxruntime.InferenceSession(dyn_model.SerializeToString(), providers=ort_providers)
 
             preferred_provider = self.sess.get_providers()[0]
-            print(f'Running on {preferred_provider}.')
+            print(f"Running on {preferred_provider}.")
             print()
-            
+
     @staticmethod
     def dynamicize_shapes(static_model):
         from onnx.tools.update_model_dims import update_inputs_outputs_dims
@@ -90,15 +95,19 @@ class CenterFace:
         for node in static_model.graph.output:
             dims = [d.dim_value for d in node.type.tensor_type.shape.dim]
             output_dims[node.name] = dims
-        input_dims.update({
-            'input.1': ['B', 3, 'H', 'W']  # RGB input image
-        })
-        output_dims.update({
-            '537': ['B', 1, 'h', 'w'],  # heatmap
-            '538': ['B', 2, 'h', 'w'],  # scale
-            '539': ['B', 2, 'h', 'w'],  # offset
-            '540': ['B', 10, 'h', 'w']  # landmarks
-        })
+        input_dims.update(
+            {
+                "input.1": ["B", 3, "H", "W"]  # RGB input image
+            }
+        )
+        output_dims.update(
+            {
+                "537": ["B", 1, "h", "w"],  # heatmap
+                "538": ["B", 2, "h", "w"],  # scale
+                "539": ["B", 2, "h", "w"],  # offset
+                "540": ["B", 10, "h", "w"],  # landmarks
+            }
+        )
         dyn_model = update_inputs_outputs_dims(static_model, input_dims, output_dims)
         return dyn_model
 
@@ -110,16 +119,15 @@ class CenterFace:
         w_new, h_new, scale_w, scale_h = self.shape_transform(in_shape, orig_shape)
 
         blob = cv2.dnn.blobFromImage(
-            img, scalefactor=1.0, size=(w_new, h_new),
-            mean=(0, 0, 0), swapRB=False, crop=False
+            img, scalefactor=1.0, size=(w_new, h_new), mean=(0, 0, 0), swapRB=False, crop=False
         )
-        if self.backend == 'opencv':
+        if self.backend == "opencv":
             self.net.setInput(blob)
             heatmap, scale, offset, lms = self.net.forward(self.onnx_output_names)
-        elif self.backend == 'onnxrt':
+        elif self.backend == "onnxrt":
             heatmap, scale, offset, lms = self.sess.run(self.onnx_output_names, {self.onnx_input_name: blob})
         else:
-            raise RuntimeError(f'Unknown backend {self.backend}')
+            raise RuntimeError(f"Unknown backend {self.backend}")
         dets, lms = self.decode(heatmap, scale, offset, lms, (h_new, w_new), threshold=threshold)
         if len(dets) > 0:
             dets[:, 0:4:2], dets[:, 1:4:2] = dets[:, 0:4:2] / scale_w, dets[:, 1:4:2] / scale_h

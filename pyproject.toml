@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "imageio>=2.25",
     "imageio-ffmpeg>=0.4.6",
+    "ffmpeg-python==0.2.0",
     "numpy==1.26.4",
     "tqdm",
     "scikit-image",
