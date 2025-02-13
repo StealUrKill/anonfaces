@@ -11,7 +11,7 @@ Please see credits and usage example for more info.
 ### You will need Visual Studio and CMake to build `DLIB` unless you use prebuilts - https://github.com/z-mahmud22/Dlib_Windows_Python3.x
 ### Install `DLIB` before installing `anonfaces`
 
-### GUI is now included. This is beta stage at this moment.
+### GUI is now included. This is at a beta stage at this moment.
 You can still run anonfaces in command-line and you can access the gui via `anonfaces gui` from the command line.
 You can also create a desktop shortcut in windows using the same above and set as minimized. This will run the gui always.
 The face database gui can also be ran via `anonfaces dbgui` and this will run the face database.

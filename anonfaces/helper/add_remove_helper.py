@@ -93,11 +93,11 @@ def install():
     print()
     print("1. NO OPTIONAL DEPENDENCIES")
     print("2. STANDARD ONNXRUNTIME-1.19.0")
-    print("3. CUDA 11.X ONNXRUNTIME-GPU-1.18.1")
+    print("3. CUDA 12.X ONNXRUNTIME-GPU-1.19.1")
     print("4. DirectML ONNXRUNTIM-DIRECTML-1.19.0")
-    print("5. OpenVINO ONNXRUNTIME-OPENVINO-1.18.0/OPENVINO-2024.1.0")
+    print("5. OpenVINO ONNXRUNTIME-OPENVINO-1.19.0/OPENVINO-2025.0.0")
     print("6. CUDA 12.X ONNXRUNTIME-GPU ORT Azure Devops Feed Latest")
-    print("7. CUDA 12.X ONNXRUNTIME-GPU-1.18.2 ORT Azure Devops Feed")
+    print("7. CUDA 12.X ONNXRUNTIME-GPU-1.19.2 ORT Azure Devops Feed")
     print()
     print("0. MAIN MENU")
     
@@ -160,7 +160,7 @@ def install_custom6(selected_branch):
     
 def install_custom7(selected_branch):
     print()
-    print("Running CUDA 12.X ONNXRUNTIME-GPU-1.18.2 ORT Azure Devops Feed subprocess...")
+    print("Running CUDA 12.X ONNXRUNTIME-GPU-1.19.2 ORT Azure Devops Feed subprocess...")
     subprocess.run([
                 "python", "-m", "pip", "uninstall", 
                 "onnxruntime-gpu",
@@ -172,7 +172,7 @@ def install_custom7(selected_branch):
             ])
     subprocess.run([
                 "python", "-m", "pip", "install", 
-                "onnxruntime-gpu==1.18.1", 
+                "onnxruntime-gpu==1.19.1", 
                 "--extra-index-url", 
                 "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/"
             ])
@@ -197,7 +197,7 @@ def cuda_install_options():
     print("2. CUDNN Website")
     print("3. TensorRT Website")
     print("4. Install All Downloaded (Version Cuda 12.X & CUDNN 9.X")
-    print("5. Install All Downloaded (Version Cuda 11.X & CUDNN 8.X - Placehholder will not work")
+    # print("5. Install All Downloaded (Version Cuda 11.X & CUDNN 8.X - Placehholder will not work")
     print("0. Main Menu")
     print()    
     choice = input("Enter your choice (0/1/2/3/4 or Press Enter): ")

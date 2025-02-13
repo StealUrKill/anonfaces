@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anonfaces"
 version = "1.0.6RC"
-requires-python = ">=3.10"
-description = "Video/Image anonymization by face detection with beta stage face recognition"
+requires-python = ">=3.11"
+description = "Video/Image anonymization by face detection with a beta stage face recognition"
 readme = "README.md"
 license = {file = "LICENSE"}
 classifiers = [
@@ -19,20 +19,20 @@ classifiers = [
 dependencies = [
     "imageio>=2.25",
     "imageio-ffmpeg>=0.4.6",
-    "numpy==1.26.4",
+    "numpy>=1.26.4",
     "tqdm",
     "scikit-image",
     "opencv-python",
-    "moviepy>=1.0.3",
+    "moviepy>=2.1.0",
     "pedalboard>=0.8.2",
-    "onnx==1.16.2",
+    "onnx>=1.16.2",
 ]
 
 [project.optional-dependencies]
-standard = ["onnxruntime==1.19.0"]
-cuda = ["onnxruntime-gpu==1.18.1"]
+standard = ["onnxruntime>=1.19.0"]
+cuda = ["onnxruntime-gpu>=1.19.1"]
 directml = ["onnxruntime-directml==1.19.0"]
-openvino = ["onnxruntime-openvino==1.18.0", "openvino==2024.1.0"]
+openvino = ["onnxruntime-openvino>=1.19.0", "openvino>=2025.0.0"]
 
 [project.scripts]
 anonfaces = "anonfaces.anonfaces:main"

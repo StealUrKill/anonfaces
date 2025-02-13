@@ -15,7 +15,7 @@ import sys
 import math
 import signal
 import platform
-from moviepy.editor import *
+from moviepy import *
 from pedalboard import *
 from pedalboard.io import AudioFile
 from tqdm import tqdm

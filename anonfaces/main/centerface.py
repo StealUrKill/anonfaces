@@ -65,7 +65,11 @@ class CenterFace:
             #  In normal conditions, overriding this choice won't be necessary.
             available_providers = onnxruntime.get_available_providers()
             if override_execution_provider is None:
-                ort_providers = available_providers
+                # Going to prefer CUDA over Tensor if set to auto and if its available due to the fact that tensor takes and extra 30 seconds to spin up.
+                if "CUDAExecutionProvider" in available_providers:
+                    ort_providers = ["CUDAExecutionProvider"]
+                else:
+                    ort_providers = available_providers
             else:
                 if override_execution_provider not in available_providers:
                     raise ValueError(f'{override_execution_provider=} not found. Available providers are: {available_providers}')

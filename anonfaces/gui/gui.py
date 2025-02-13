@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import imageio_ffmpeg as ffmpeg
 import threading
 import subprocess
 import signal
@@ -59,6 +60,10 @@ class AnonymizationApp:
         
         self.clearoptions_button = tk.Button(self.control_frame, text="Clear All Options", command=self.clear_options_launch)
         self.clearoptions_button.pack(side=tk.LEFT, padx=5)
+        
+        self.convertaudio_button = tk.Button(self.control_frame, text="Convert Audio", command=self.convert_audio_launch)
+        self.convertaudio_button.pack(side=tk.LEFT, padx=5)
+        self.tooltips.append(ToolTip(self.convertaudio_button, "Convert to libx264 video codec and aac audio codec."))
         
         self.progress = ttk.Progressbar(root, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", pady=5)
@@ -151,7 +156,7 @@ class AnonymizationApp:
            Detection threshold. Default is 0.2.
             
         4. Scale:
-           Downscale images for inference. Format WxH (e.g., scale 640x360).
+           Downscale images for inference. Format WxH (e.g., scale 1280x720).
             
         5. Preview:
            Enable live preview GUI (may reduce performance).
@@ -181,13 +186,14 @@ class AnonymizationApp:
             Face Recognition Threshold: Set face recognition threshold. Default: 0.60.
             
         13. Audio:
-            Distory Audio: Enable audio distortion in output video.
+            Distort Audio: Enable audio distortion in output video. This applies --keep-audio but will not work with --copy-acodec due to MoviePy
             Keep Audio: Keep audio from the video source.
             Copy Audio Codec: Keep the audio codec from the source.
             
         14. FFmpeg Config:
             JSON format for FFmpeg encoding options. Default: '{"codec": "libx264"}'.
-            Windows example in GUI --ffmpeg-config {"fps": 10, "bitrate": "1000k"}
+            Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
+            Windows example in GUI {"fps": 10, "bitrate": "1000k"}
             See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
             
         15. Backend:
@@ -383,11 +389,21 @@ Automatically clears output is output extension is present"""
         
         self.scale_label = tk.Label(self.options_frame, text="Scale (WxH):")
         self.scale_label.grid(row=1, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.scale_label, "Downscale images for network inference to this size (format: WxH, example: 640x360)."))
+        self.tooltips.append(ToolTip(self.scale_label,
+            """Downscale images for network inference to this size (format: WxH, example: 1280x720).
+Single click to add default 1280x720 or double click to remove"""
+            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
+        
+        # Bind left-click to insert default value into entry box
+        # Single click inserts "1280x720"
+        self.scale_label.bind("<Button-1>", lambda event: (self.scale_entry.delete(0, tk.END), self.scale_entry.insert(0, "1280x720")))
+        
+        # Double-click clears the input field
+        self.scale_label.bind("<Double-Button-1>", lambda event: self.scale_entry.delete(0, tk.END))
         
         self.scale_entry = tk.Entry(self.options_frame, width=17)
         self.scale_entry.grid(row=1, column=1, padx=197, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.scale_entry, "Downscale images for network inference to this size (format: WxH, example: 640x360)."))
+        self.tooltips.append(ToolTip(self.scale_entry, "Downscale images for network inference to this size (format: WxH, example: 1280x720)."))
 
         self.replacewith_label = tk.Label(self.options_frame, text="Replace With:")
         self.replacewith_label.grid(row=2, column=1, padx=0, pady=5, sticky="w")  
@@ -479,7 +495,8 @@ be automatically selected. Only used if backend is onnxrt"""
 This argument is expected in JSON notation. For a list
 of possible options, refer to the ffmpeg-imageio docs.
 Default: '{"codec": "libx264"}'
-Windows example in GUI --ffmpeg-config {"fps": 10, "bitrate": "1000k"}."""
+Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
+Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
             ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
             
         self.ffmpeg_config_entry = tk.Entry(self.options_frame, width=27)
@@ -489,7 +506,8 @@ Windows example in GUI --ffmpeg-config {"fps": 10, "bitrate": "1000k"}."""
 This argument is expected in JSON notation. For a list
 of possible options, refer to the ffmpeg-imageio docs.
 Default: '{"codec": "libx264"}'
-Windows example in GUI --ffmpeg-config {"fps": 10, "bitrate": "1000k"}."""
+Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
+Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
             ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
         
 
@@ -698,8 +716,83 @@ Windows example in GUI --ffmpeg-config {"fps": 10, "bitrate": "1000k"}."""
         self.replacewith_var.set("")
         self.backend_var.set("")
         self.ep_var.set("")
+        
+
+    def convert_audio_launch(self):
+        self.clear_log()
+        # Find the FFmpeg executable
+        ffmpeg_binaries_path = self.find_imageio_ffmpeg_binaries_path()
+        ffmpeg_path = self.find_ffmpeg_executable(ffmpeg_binaries_path) if ffmpeg_binaries_path else None
     
-      
+        if not ffmpeg_path:
+            self.log_message("FFmpeg executable not found. Ensure imageio-ffmpeg is installed.")
+            return
+    
+        # Get input file path from GUI
+        inputFilePath = self.input_entry.get()
+    
+        if not inputFilePath:
+            self.log_message("Please select an input file before converting audio.")
+            return
+    
+        # Generate output file path with "_converted" before the extension
+        input_dir, input_filename = os.path.split(inputFilePath)
+        input_name, input_ext = os.path.splitext(input_filename)
+        outputFilePath = os.path.join(input_dir, f"{input_name}_converted{input_ext}")
+        self.progress.start()
+        # Construct the FFmpeg command
+        ffmpegCommand = [
+            ffmpeg_path, "-y", "-i", inputFilePath,
+            "-c:v", "libx264", "-crf", "23", "-c:a", "aac", "-q:a", "100", "-sn", "-vf", "yadif", outputFilePath
+        ]
+    
+        self.log_message(f"Running FFmpeg command: {' '.join(ffmpegCommand)}")
+    
+        def run_ffmpeg():
+            """Runs FFmpeg and logs output asynchronously."""
+            try:
+                self.process = subprocess.Popen(
+                    ffmpegCommand, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                )
+    
+                for line in iter(self.process.stderr.readline, ""):
+                    self.log_message(line.strip())
+    
+                self.process.wait()
+    
+                if self.process.returncode == 0:
+                    self.log_message(f"Audio conversion completed successfully. Output file: {outputFilePath}")
+                else:
+                    self.log_message(f"Error in audio conversion: {self.process.stderr.read()}")
+    
+            except Exception as e:
+                self.log_message(f"An error occurred while running FFmpeg: {e}")
+            finally:
+                self.progress.stop()
+                self.process = None  # process is set to None after completion
+    
+        # Run FFmpeg in a separate thread so GUI remains responsive
+        threading.Thread(target=run_ffmpeg, daemon=True).start()
+
+    
+    
+    def find_imageio_ffmpeg_binaries_path(self):
+        try:
+            ffmpeg_module_path = os.path.dirname(ffmpeg.__file__)  # Get the path to the imageio_ffmpeg module
+            binaries_path = os.path.join(ffmpeg_module_path, "binaries")  # Construct the path to the binaries folder
+            return binaries_path
+        except ImportError:
+            return None  # imageio-ffmpeg package not found
+    
+    def find_ffmpeg_executable(self, binaries_path):
+        if binaries_path and os.path.isdir(binaries_path):  # Ensure path exists
+            for filename in os.listdir(binaries_path):
+                if filename.lower().startswith("ffmpeg") and filename.lower().endswith(".exe"):
+                    return os.path.join(binaries_path, filename)
+        return None  # FFmpeg executable not found
+    
+
+
     def collect_options(self):
         options = {
             "input": self.input_entry.get(),
