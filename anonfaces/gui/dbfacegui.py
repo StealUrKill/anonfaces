@@ -1,9 +1,23 @@
-import tkinter as tk
-from tkinter import simpledialog, filedialog, messagebox
-from PIL import Image, ImageTk
-import sqlite3
-import io
+import sys
 import os
+import sqlite3
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QFileDialog, QMessageBox, QInputDialog,
+    QScrollArea, QGridLayout, QDialog
+)
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
+
+try:
+    from anonfaces.gui.gui import apply_dark_theme
+except (ModuleNotFoundError, ImportError):
+    _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _pkg_dir not in sys.path:
+        sys.path.insert(0, _pkg_dir)
+    from gui.gui import apply_dark_theme
+
 
 def initialize_database():
     database_path = os.path.join(
@@ -29,490 +43,406 @@ def initialize_database():
     ''')
     conn.commit()
     return conn, cursor
-    
 
-class FaceDatabaseApp:
-    def __init__(self, root):
-        self.root = root
-        self.is_closed = False
-        self.root.title("Face Database Manager")
-        self.root.resizable(True, True)
+
+class FaceDatabaseApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Face Database Manager")
+        self.setMinimumSize(600, 400)
         self.conn, self.cursor = initialize_database()
-        # Top 3 Buttons
-        self.button_frame = tk.Frame(root)
-        self.button_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=5)
-        
-        self.open_button = tk.Button(self.button_frame, text="Single Image Enroll", command=self.open_file_dialog)
-        self.open_button.pack(side=tk.LEFT, padx=5)
-        
-        self.batch_button = tk.Button(self.button_frame, text="Batch Image Enroll", command=self.batch_enroll_dialog)
-        self.batch_button.pack(side=tk.LEFT, padx=5) 
-        
-        # DELETE ALL OF COURSE
-        self.batch_button = tk.Button(self.button_frame, text="Clear Database", command=self.delete_all_dialog)
-        self.batch_button.pack(side=tk.RIGHT, padx=50)
-        
-        self.content_frame = tk.Frame(root)
-        self.content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        # vert scrollbar
-        self.v_scrollbar = tk.Scrollbar(self.content_frame, orient=tk.VERTICAL)
-        self.v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(10, 10, 10, 10)
 
-        # hori scrollbar
-        self.h_scrollbar = tk.Scrollbar(self.content_frame, orient=tk.HORIZONTAL)
-        self.h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        # Top buttons
+        btn_frame = QWidget()
+        btn_layout = QHBoxLayout(btn_frame)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
 
-        # canvas inside the content_frame from above
-        self.canvas = tk.Canvas(self.content_frame, yscrollcommand=self.v_scrollbar.set, xscrollcommand=self.h_scrollbar.set)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        single_btn = QPushButton("Single Image Enroll")
+        single_btn.clicked.connect(self._open_file_dialog)
+        btn_layout.addWidget(single_btn)
 
-        # scrollbars control the canvas
-        self.v_scrollbar.config(command=self.canvas.yview)
-        self.h_scrollbar.config(command=self.canvas.xview)
+        batch_btn = QPushButton("Batch Image Enroll")
+        batch_btn.clicked.connect(self._batch_enroll_dialog)
+        btn_layout.addWidget(batch_btn)
 
-        # wigets and images frame
-        self.images_frame = tk.Frame(self.canvas)
-        self.canvas.create_window((0, 0), window=self.images_frame, anchor="nw")
+        btn_layout.addStretch()
 
-        # Bind the frame's configuration event to update the scroll region
-        self.images_frame.bind("<Configure>", self.on_frame_configure)
+        clear_btn = QPushButton("Clear Database")
+        clear_btn.clicked.connect(self._delete_all_dialog)
+        btn_layout.addWidget(clear_btn)
 
-        self.load_images()
+        main_layout.addWidget(btn_frame)
 
+        # Scrollable image area
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.images_widget = QWidget()
+        self.images_layout = QVBoxLayout(self.images_widget)
+        self.images_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll_area.setWidget(self.images_widget)
+        main_layout.addWidget(self.scroll_area, stretch=1)
 
+        self._load_images()
+        self._fit_to_content()
 
-    def on_frame_configure(self, event=None):
-        # update scroll region to encompass the entire frame size
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.update_root_size()
+    def _fit_to_content(self):
+        screen = QApplication.primaryScreen().geometry()
+        max_w = int(screen.width() * 0.98)
+        max_h = int(screen.height() * 0.8)
+        self.adjustSize()
+        w = min(self.sizeHint().width() + 50, max_w)
+        h = min(self.sizeHint().height() + 60, max_h)
+        w = max(w, 600)
+        h = max(h, 400)
+        self.resize(w, h)
+        self.move((screen.width() - w) // 2, (screen.height() - h) // 2)
 
+    def _pixmap_from_blob(self, blob_data, max_w=100, max_h=200):
+        pixmap = QPixmap()
+        pixmap.loadFromData(blob_data)
+        if not pixmap.isNull():
+            pixmap = pixmap.scaled(max_w, max_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+        return pixmap
 
+    # ── enroll ───────────────────────────────────────────────────────
 
-    def update_root_size(self):
-        # find the size of the canvas content
-        bbox = self.canvas.bbox("all")
-        content_width = bbox[2]  # bbox[2] is the right most coordinate
-        content_height = bbox[3] # bbox[3] is the bottom most coordinate
-        
-        # screen width and height
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        
-        # allowed percentage of the screen
-        max_width = int(screen_width * .98)
-        max_height = int(screen_height * .8)
-        
-        # set the new size for the root window, limiting to screen size
-        new_width = min(content_width + 50, max_width)
-        new_height = min(content_height + 60, max_height)
-        
-        # window centering of screen
-        position_x = (screen_width // 2) - (new_width // 2)
-        position_y = (screen_height // 2) - (new_height // 2)
-    
-        # geometry for the root window with position
-        self.root.geometry(f"{new_width}x{new_height}+{position_x}+{position_y}")
+    def _open_file_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select an Image",
+            filter="Image files (*.jpg *.jpeg *.png)")
+        if path:
+            self._process_image(path)
 
+    def _batch_enroll_dialog(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select Images",
+            filter="Image files (*.jpg *.jpeg *.png)")
+        if paths:
+            name, ok = QInputDialog.getText(self, "Input", "Enter the name for these faces:")
+            if ok and name:
+                for path in paths:
+                    self._process_image(path, name)
+            elif ok:
+                QMessageBox.warning(self, "No Name", "No name provided, skipping batch enroll.")
 
-
-    def open_file_dialog(self):
-        file_path = filedialog.askopenfilename(
-            title="Select an Image",
-            filetypes=[("Image files", "*.jpg *.jpeg *.png")]
-        )
-
-        if file_path:
-            self.process_image(file_path)
-
-
-
-    def batch_enroll_dialog(self):
-        file_paths = filedialog.askopenfilenames(
-            title="Select Images",
-            filetypes=[("Image files", "*.jpg *.jpeg *.png")]
-        )
-
-        if file_paths:
-            name = simpledialog.askstring("Input", "Enter the name for these faces:", parent=self.root)
-            if name:
-                for file_path in file_paths:
-                    self.process_image(file_path, name)
-            else:
-                messagebox.showwarning("No Name", "No name provided, skipping batch enroll.")
-
-
-
-    def process_image(self, file_path, name=None):
+    def _process_image(self, file_path, name=None):
         if name is None:
-            name = simpledialog.askstring("Input", "Enter the name for this face:", parent=self.root)
-    
-        if name:
-            # count how many images are already associated with this person to limit the db
-            self.cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
-            person_id_row = self.cursor.fetchone()
-            if person_id_row:
-                person_id = person_id_row[0]
-                self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
-                image_count = self.cursor.fetchone()[0]
-                if image_count >= 5:
-                    messagebox.showwarning("Limit Reached", "This person already has 5 images. No more can be added.")
-                    return
-            else:
-                self.cursor.execute('INSERT OR IGNORE INTO persons (name) VALUES (?)', (name,))
-                self.cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
-                person_id = self.cursor.fetchone()[0]
-    
-            with open(file_path, 'rb') as file:
-                image_data = file.read()
-    
-            # db insert image associated with the person
-            self.cursor.execute('INSERT INTO images (person_id, image) VALUES (?, ?)', (person_id, image_data))
-            self.conn.commit()
-            self.load_images()  # refreshes images
+            name, ok = QInputDialog.getText(self, "Input", "Enter the name for this face:")
+            if not ok or not name:
+                QMessageBox.warning(self, "No Name", "No name provided, skipping.")
+                return
+
+        self.cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
+        person_row = self.cursor.fetchone()
+        if person_row:
+            person_id = person_row[0]
+            self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
+            if self.cursor.fetchone()[0] >= 5:
+                QMessageBox.warning(self, "Limit Reached",
+                    "This person already has 5 images. No more can be added.")
+                return
         else:
-            messagebox.showwarning("No Name", "No name provided, skipping.")
+            self.cursor.execute('INSERT OR IGNORE INTO persons (name) VALUES (?)', (name,))
+            self.cursor.execute('SELECT id FROM persons WHERE name = ?', (name,))
+            person_id = self.cursor.fetchone()[0]
 
+        with open(file_path, 'rb') as f:
+            image_data = f.read()
 
+        self.cursor.execute('INSERT INTO images (person_id, image) VALUES (?, ?)',
+            (person_id, image_data))
+        self.conn.commit()
+        self._load_images()
 
-    def delete_all_dialog(self):
-        confirm = messagebox.askyesno("Confirm Delete All", "Are you sure you want to delete all users and images?", parent=self.root)
-        
-        if confirm:
+    # ── delete all ───────────────────────────────────────────────────
+
+    def _delete_all_dialog(self):
+        reply = QMessageBox.question(self, "Confirm Delete All",
+            "Are you sure you want to delete all users and images?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
             try:
                 self.cursor.execute('DELETE FROM images')
                 self.cursor.execute('DELETE FROM persons')
                 self.conn.commit()
-                messagebox.showinfo("Success", "All users and images have been deleted.", parent=self.root)
+                QMessageBox.information(self, "Success", "All users and images have been deleted.")
             except Exception as e:
-                messagebox.showerror("Error", f"An error occurred while deleting data: {e}", parent=self.root)
-            
-            self.load_images()  # refreshes images
-        else:
-            messagebox.showinfo("Cancelled", "Deletion cancelled.", parent=self.root)
-    
-    
+                QMessageBox.critical(self, "Error", f"An error occurred: {e}")
+            self._load_images()
 
-    def load_images(self):
-        # clears frame to load
-        for widget in self.images_frame.winfo_children():
-            widget.destroy()
+    # ── load and display images ──────────────────────────────────────
+
+    def _load_images(self):
+        # Clear existing widgets
+        while self.images_layout.count():
+            child = self.images_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
 
         self.cursor.execute('''
-            SELECT persons.id, persons.name, images.id, images.image 
-            FROM persons 
+            SELECT persons.id, persons.name, images.id, images.image
+            FROM persons
             JOIN images ON persons.id = images.person_id
             ORDER BY persons.name, images.id
         ''')
 
         current_name = None
-        image_row_frame = None
+        row_widget = None
+        images_layout = None
 
-        for record in self.cursor.fetchall():
-            person_id, name, image_id, image_data = record
-
-            # new row for new name
+        for person_id, name, image_id, image_data in self.cursor.fetchall():
             if name != current_name:
                 current_name = name
-                image_row_frame = tk.Frame(self.images_frame)
-                image_row_frame.pack(fill=tk.X, pady=5)
 
-                # side by side images
-                images_container = tk.Frame(image_row_frame)
-                images_container.pack(side=tk.LEFT)
+                row_widget = QWidget()
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(5, 5, 5, 5)
 
-                # name by images
-                name_label = tk.Label(image_row_frame, text=name, width=20, anchor="w")
-                name_label.pack(side=tk.LEFT, padx=10)
+                # Images container
+                img_container = QWidget()
+                images_layout = QHBoxLayout(img_container)
+                images_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.addWidget(img_container)
 
-                # contiainer for frame buttons - Rename/Export/Delete...etc
-                buttons_frame = tk.Frame(image_row_frame)
-                buttons_frame.pack(side=tk.RIGHT, padx=5)
+                # Name label
+                name_label = QLabel(name)
+                name_label.setFixedWidth(150)
+                row_layout.addWidget(name_label)
 
-                rename_button = tk.Button(buttons_frame, text="Rename", command=lambda id=image_id: self.rename_person(id))
-                rename_button.pack(side=tk.LEFT, padx=5)
+                # Action buttons
+                btn_container = QWidget()
+                btn_lay = QHBoxLayout(btn_container)
+                btn_lay.setContentsMargins(0, 0, 0, 0)
 
-                export_button = tk.Button(buttons_frame, text="Export", command=lambda id=person_id: self.export_image(id))
-                export_button.pack(side=tk.LEFT, padx=5)
+                rename_btn = QPushButton("Rename")
+                rename_btn.clicked.connect(lambda checked, iid=image_id: self._rename_person(iid))
+                btn_lay.addWidget(rename_btn)
 
-                delete_single_button = tk.Button(buttons_frame, text="Delete Image", command=lambda id=person_id: self.delete_single_image(id))
-                delete_single_button.pack(side=tk.LEFT, padx=5)
-                
-                delete_button = tk.Button(buttons_frame, text="Delete", command=lambda id=image_id: self.delete_all(id))
-                delete_button.pack(side=tk.LEFT, padx=5)
+                export_btn = QPushButton("Export")
+                export_btn.clicked.connect(lambda checked, pid=person_id: self._export_image(pid))
+                btn_lay.addWidget(export_btn)
 
-            # binary data back to an image
-            image_stream = io.BytesIO(image_data)
-            img = Image.open(image_stream)
-            img.thumbnail((100, 200))  # thumbnail size images
-            img_tk = ImageTk.PhotoImage(img)
+                del_img_btn = QPushButton("Delete Image")
+                del_img_btn.clicked.connect(lambda checked, pid=person_id: self._delete_single_image(pid))
+                btn_lay.addWidget(del_img_btn)
 
-            # puts the image in the above container
-            img_label = tk.Label(images_container, image=img_tk)
-            img_label.image = img_tk  # reference to avoid garbage collection
-            img_label.pack(side=tk.LEFT, padx=5)
+                del_btn = QPushButton("Delete")
+                del_btn.clicked.connect(lambda checked, iid=image_id: self._delete_all(iid))
+                btn_lay.addWidget(del_btn)
 
+                row_layout.addWidget(btn_container)
+                self.images_layout.addWidget(row_widget)
 
+            # Add image thumbnail
+            pixmap = self._pixmap_from_blob(image_data)
+            if not pixmap.isNull() and images_layout is not None:
+                img_label = QLabel()
+                img_label.setPixmap(pixmap)
+                images_layout.addWidget(img_label)
 
-    def rename_person(self, image_id):
-        new_name = simpledialog.askstring("Input", "Enter the new name for this face:", parent=self.root)
-        
-        if new_name:
-            # find the current person_id and name associated with the image
-            self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-            current_person_id = self.cursor.fetchone()
-            
-            if current_person_id:
-                current_person_id = current_person_id[0]
-                self.cursor.execute('SELECT name FROM persons WHERE id = ?', (current_person_id,))
-                old_name = self.cursor.fetchone()[0]
-            
-                # does person with the new name already exists?
-                self.cursor.execute('SELECT id FROM persons WHERE name = ?', (new_name,))
-                existing_person = self.cursor.fetchone()
-            
-                if existing_person:
-                    new_person_id = existing_person[0]
-                    
-                    # image count for this person
-                    self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (new_person_id,))
-                    image_count = self.cursor.fetchone()[0]
-                    
-                    if image_count >= 5:
-                        messagebox.showerror("Error", "Cannot add more than 5 images to the same person.")
-                        return
-                    else:
-                        # update the person_id for this image to the existing person - add image into existing
-                        self.cursor.execute('UPDATE images SET person_id = ? WHERE id = ?', (new_person_id, image_id))
-                        self.conn.commit()
-                        messagebox.showinfo("Success", f"Image added to existing person '{new_name}'.")
-                        
-                        # see if the old person_id has any remaining images and delete person is image count is 0
-                        self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (current_person_id,))
-                        remaining_images_count = self.cursor.fetchone()[0]
-                        
-                        if remaining_images_count == 0:
-                            self.cursor.execute('DELETE FROM persons WHERE id = ?', (current_person_id,))
-                            self.conn.commit()
-                            #uncomment for cleanup message
-                            #messagebox.showinfo("Cleanup", f"Old name '{old_name}' removed from the database.")
-                else:
-                    # update the person's name for this image's person - ?
-                    self.cursor.execute('''
-                        UPDATE persons 
-                        SET name = ? 
-                        WHERE id = ?
-                    ''', (new_name, current_person_id))
-                    self.conn.commit()
-                    messagebox.showinfo("Success", "Name updated.")
-            
-            self.load_images()  # image refresh
-        else:
-            messagebox.showwarning("No Name", "No new name provided, modification skipped.")
+    # ── rename ───────────────────────────────────────────────────────
 
-
-
-    def export_image(self, person_id):
-        # find the person's name based on person_id
-        self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-        person_name = self.cursor.fetchone()
-
-        if not person_name:
-            messagebox.showwarning("No Person Found", "No person found with the specified ID.")
+    def _rename_person(self, image_id):
+        new_name, ok = QInputDialog.getText(self, "Input", "Enter the new name for this face:")
+        if not ok or not new_name:
+            QMessageBox.warning(self, "No Name", "No new name provided, modification skipped.")
             return
-    
-        name = person_name[0].replace(" ", "_")  # no junk names please
-        # find this persons images
+
+        self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return
+        current_person_id = row[0]
+
+        self.cursor.execute('SELECT name FROM persons WHERE id = ?', (current_person_id,))
+        old_name = self.cursor.fetchone()[0]
+
+        self.cursor.execute('SELECT id FROM persons WHERE name = ?', (new_name,))
+        existing = self.cursor.fetchone()
+
+        if existing:
+            new_person_id = existing[0]
+            self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (new_person_id,))
+            if self.cursor.fetchone()[0] >= 5:
+                QMessageBox.critical(self, "Error",
+                    "Cannot add more than 5 images to the same person.")
+                return
+
+            self.cursor.execute('UPDATE images SET person_id = ? WHERE id = ?',
+                (new_person_id, image_id))
+            self.conn.commit()
+            QMessageBox.information(self, "Success",
+                f"Image added to existing person '{new_name}'.")
+
+            self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?',
+                (current_person_id,))
+            if self.cursor.fetchone()[0] == 0:
+                self.cursor.execute('DELETE FROM persons WHERE id = ?', (current_person_id,))
+                self.conn.commit()
+        else:
+            self.cursor.execute('UPDATE persons SET name = ? WHERE id = ?',
+                (new_name, current_person_id))
+            self.conn.commit()
+            QMessageBox.information(self, "Success", "Name updated.")
+
+        self._load_images()
+
+    # ── export ───────────────────────────────────────────────────────
+
+    def _export_image(self, person_id):
+        self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            QMessageBox.warning(self, "Not Found", "No person found with the specified ID.")
+            return
+        name = row[0].replace(" ", "_")
+
         self.cursor.execute('SELECT id, image FROM images WHERE person_id = ?', (person_id,))
         images = self.cursor.fetchall()
-        
         if not images:
-            messagebox.showwarning("No Images", "No images found for this person.")
+            QMessageBox.warning(self, "No Images", "No images found for this person.")
             return
-    
-        directory_path = filedialog.askdirectory(title="Select Directory to Save Images")
-    
-        if directory_path:
-            for index, (image_id, image_data) in enumerate(images):
-                # new generated filename from persons.name and images.id
-                file_path = os.path.join(directory_path, f"{name}_{image_id}.jpg")
-                
-                with open(file_path, 'wb') as file:
-                    file.write(image_data)
-    
-            messagebox.showinfo("Success", f"All images exported successfully to {directory_path}.")
-        else:
-            messagebox.showinfo("Cancelled", "Export cancelled.")
 
+        directory = QFileDialog.getExistingDirectory(self, "Select Directory to Save Images")
+        if directory:
+            for image_id, image_data in images:
+                file_path = os.path.join(directory, f"{name}_{image_id}.jpg")
+                with open(file_path, 'wb') as f:
+                    f.write(image_data)
+            QMessageBox.information(self, "Success",
+                f"All images exported successfully to {directory}.")
 
+    # ── delete person and all images ─────────────────────────────────
 
-    def delete_all(self, image_id):
-        
-        # find persons.id from images.id
+    def _delete_all(self, image_id):
         self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-        person_id = self.cursor.fetchone()[0]
-        # now we have the persons.id lets find the name
+        row = self.cursor.fetchone()
+        if not row:
+            return
+        person_id = row[0]
+
         self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
         person_name = self.cursor.fetchone()[0]
-        
-        confirm = messagebox.askyesno(f"Confirm Deletion of {person_name}", f"Are you sure you want to delete {person_name} and all the associated images?")
-        if confirm:
-            # get the person associated with the image
-            self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-            person_id = self.cursor.fetchone()[0]
-            if person_id:
-                
-                # find persons.id from images.id
-                self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-                person_id = self.cursor.fetchone()[0]
-                # now we have the persons.id lets find the name
-                self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-                person_name = self.cursor.fetchone()[0]
-                
-                # delete this persons images from images
-                self.cursor.execute('DELETE FROM images WHERE person_id = ?', (person_id,))
-                # delete this person from person
-                self.cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
-                self.conn.commit()
-                messagebox.showinfo("Success", f"{person_name} and all associated images were deleted.")
-            else:
-                messagebox.showwarning("Error", "Failed to find the person associated with this image.")
-            
-            self.load_images()  # refresh images
-        else:
-            messagebox.showinfo("Cancelled", "Deletion cancelled.")
-        
 
-  
-    def delete_single_image(self, person_id):
-        print(f"Deleting images for person_id: {person_id}")
-        # Open a new window to display all images associated with this person in a grid
-        self.image_list_window = tk.Toplevel(self.root)
-        self.image_list_window.title("Select Image to Delete")
-        
-        # canvas to hold the images and scrollbar
-        canvas = tk.Canvas(self.image_list_window)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # vert scrollbar
-        v_scrollbar = tk.Scrollbar(self.image_list_window, orient=tk.VERTICAL, command=canvas.yview)
-        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        canvas.configure(yscrollcommand=v_scrollbar.set)
-        
-        # frame inside the canvas to hold the images - why did i reverse this from other?
-        image_frame = tk.Frame(canvas)
-        canvas.create_window((0, 0), window=image_frame, anchor="nw")
-        
-        image_frame.bind("<Configure>", lambda event: self.update_scroll_region(canvas))
-        
-        # gets this persons images
+        reply = QMessageBox.question(self, f"Confirm Deletion of {person_name}",
+            f"Are you sure you want to delete {person_name} and all associated images?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.cursor.execute('DELETE FROM images WHERE person_id = ?', (person_id,))
+            self.cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
+            self.conn.commit()
+            QMessageBox.information(self, "Success",
+                f"{person_name} and all associated images were deleted.")
+            self._load_images()
+
+    # ── delete single image (picker dialog) ──────────────────────────
+
+    def _delete_single_image(self, person_id):
         self.cursor.execute('SELECT id, image FROM images WHERE person_id = ?', (person_id,))
         images = self.cursor.fetchall()
-        
-        # shows the images in a grid with 5 columns
+        if not images:
+            QMessageBox.warning(self, "No Images", "No images found for this person.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Select Image to Delete")
+        layout = QVBoxLayout(dlg)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setSpacing(5)
+
         columns = 5
         for index, (image_id, image_data) in enumerate(images):
-            image_stream = io.BytesIO(image_data)
-            img = Image.open(image_stream)
-            img.thumbnail((100, 200))  # thumbnail size
-            img_tk = ImageTk.PhotoImage(img)
-        
-            img_button = tk.Button(image_frame, image=img_tk, command=lambda id=image_id: confirm_delete_image(id))
-            img_button.image = img_tk
-            img_button.grid(row=index // columns, column=index % columns, padx=5, pady=5)
-        
-        # Update the window size based on the content
-        self.image_list_window.update_idletasks()
-        
-        # find the size of the content inside the image_frame
-        content_width = image_frame.winfo_reqwidth()
-        content_height = image_frame.winfo_reqheight()
-        
-        # screen width and height
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        
-        # allowed percentage of the screen
-        max_width = int(screen_width * .98)
-        max_height = int(screen_height * .8)
-        
-        # limiting to screen size
-        new_width = min(content_width + 20, max_width)
-        new_height = min(content_height + 20, max_height)
-        
-        # window centering of screen
-        position_x = (screen_width // 2) - (new_width // 2)
-        position_y = (screen_height // 2) - (new_height // 2)
-        
-        # geometry for the image_list_window with position
-        self.image_list_window.geometry(f"{new_width}x{new_height}+{position_x}+{position_y}")
+            pixmap = self._pixmap_from_blob(image_data)
+            if pixmap.isNull():
+                continue
 
+            img_label = QLabel()
+            img_label.setPixmap(pixmap)
 
-        def confirm_delete_image(image_id):
-            # find persons.id from images.id
-            self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-            person_id = self.cursor.fetchone()[0]
-            # now we have the persons.id lets find the name
-            self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-            person_name = self.cursor.fetchone()[0]
-            confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete this image from '{person_name}'?", parent=self.image_list_window)
-            
-            if confirm:
-                # find persons.id from images.id
-                self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
-                person_id = self.cursor.fetchone()[0]
-                # now we have the persons.id lets find the name
-                self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
-                person_name = self.cursor.fetchone()[0]
-                #delete image
-                self.cursor.execute('DELETE FROM images WHERE id = ?', (image_id,))
-                self.conn.commit()   
-                # make sure this person have no more images because if so they will be deleted. 
-                self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
-                remaining_images_count = self.cursor.fetchone()[0]
-                
-                if remaining_images_count == 0:
-                    # If no other images exist, delete the person
-                    self.cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
-                    self.conn.commit()
-                    messagebox.showinfo("Person Deleted", f"The person '{person_name}' has been deleted because they have no more associated images.", parent=self.image_list_window)
-                else:
-                    messagebox.showinfo("Success", f"Image deleted from '{person_name}'.", parent=self.image_list_window)
-                
-                self.image_list_window.destroy()
-                self.load_images()  # refresh images again
-        
-    
-       
-    def update_scroll_region(self, canvas):
-        canvas.configure(scrollregion=canvas.bbox("all"))
-    
-    
+            container = QPushButton()
+            container.setFixedSize(pixmap.width() + 10, pixmap.height() + 10)
+            container.setStyleSheet("QPushButton { border: 1px solid #3a3a3a; }")
+            container_layout = QVBoxLayout(container)
+            container_layout.setContentsMargins(2, 2, 2, 2)
+            container_layout.addWidget(img_label, alignment=Qt.AlignmentFlag.AlignCenter)
+            container.clicked.connect(
+                lambda checked, iid=image_id, d=dlg: self._confirm_delete_image(iid, d))
 
-    def confirm_delete_image(self, image_id):
-        confirm = messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this image?")
-        if confirm:
+            grid.addWidget(container, index // columns, index % columns)
+
+        scroll.setWidget(grid_widget)
+        layout.addWidget(scroll)
+
+        # Size dialog to content
+        screen = QApplication.primaryScreen().geometry()
+        dlg.resize(
+            min(grid_widget.sizeHint().width() + 40, int(screen.width() * 0.98)),
+            min(grid_widget.sizeHint().height() + 40, int(screen.height() * 0.8)))
+        dlg.move((screen.width() - dlg.width()) // 2,
+                 (screen.height() - dlg.height()) // 2)
+        dlg.exec()
+
+    def _confirm_delete_image(self, image_id, dialog):
+        self.cursor.execute('SELECT person_id FROM images WHERE id = ?', (image_id,))
+        row = self.cursor.fetchone()
+        if not row:
+            return
+        person_id = row[0]
+
+        self.cursor.execute('SELECT name FROM persons WHERE id = ?', (person_id,))
+        person_name = self.cursor.fetchone()[0]
+
+        reply = QMessageBox.question(dialog, "Confirm Delete",
+            f"Are you sure you want to delete this image from '{person_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
             self.cursor.execute('DELETE FROM images WHERE id = ?', (image_id,))
             self.conn.commit()
-            messagebox.showinfo("Success", "Image deleted.")
-            self.image_list_window.destroy()
-            self.load_images()  # refresh images for the last time
-    
 
+            self.cursor.execute('SELECT COUNT(*) FROM images WHERE person_id = ?', (person_id,))
+            remaining = self.cursor.fetchone()[0]
+
+            if remaining == 0:
+                self.cursor.execute('DELETE FROM persons WHERE id = ?', (person_id,))
+                self.conn.commit()
+                QMessageBox.information(dialog, "Person Deleted",
+                    f"'{person_name}' has been deleted (no remaining images).")
+            else:
+                QMessageBox.information(dialog, "Success",
+                    f"Image deleted from '{person_name}'.")
+
+            dialog.close()
+            self._load_images()
+
+    # ── cleanup ──────────────────────────────────────────────────────
 
     def close_app(self):
-        if not self.is_closed:  # Check if the app has already been closed
-            self.is_closed = True  # Set the flag to prevent re-entry
-            if self.conn:
-                self.conn.close()
-            if self.root and self.root.winfo_exists():  # Check if the window exists
-                self.root.destroy()
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+        self.close()
 
+    def closeEvent(self, event):
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+        event.accept()
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = FaceDatabaseApp(root)
-    root.protocol("WM_DELETE_WINDOW", app.close_app)
-    root.mainloop()
+    app = QApplication.instance() or QApplication(sys.argv)
+    apply_dark_theme(app)
+    window = FaceDatabaseApp()
+    window.show()
+    sys.exit(app.exec())

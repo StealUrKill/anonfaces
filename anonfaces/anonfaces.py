@@ -1,35 +1,47 @@
 #CREATING FOR NEW ADDITIONS/GUI
 import argparse
 import sys
-import tkinter as tk
+
+# Import onnxruntime before PyQt6 to avoid DLL conflicts on Windows
+_cached_providers = None
+try:
+    import onnxruntime as _ort
+    _cached_providers = _ort.get_available_providers() or []
+except Exception:
+    pass
+
+from PyQt6.QtWidgets import QApplication
 
 try:
     from anonfaces.gui.dbfacegui import FaceDatabaseApp
-    from anonfaces.gui.gui import AnonymizationApp
+    from anonfaces.gui.gui import AnonymizationApp, apply_dark_theme
     from anonfaces.main.main import main as main_script
     from anonfaces.helper.cleanup import remove_database
 except (ModuleNotFoundError, ImportError):
     # Standalone mode - running directly from the package directory
     from gui.dbfacegui import FaceDatabaseApp
-    from gui.gui import AnonymizationApp
+    from gui.gui import AnonymizationApp, apply_dark_theme
     from main.main import main as main_script
     from helper.cleanup import remove_database
 
 def run_anonfaces_gui():
-    root = tk.Tk()
-    app = AnonymizationApp(root)
-    root.mainloop()
+    app = QApplication.instance() or QApplication(sys.argv)
+    apply_dark_theme(app)
+    window = AnonymizationApp()
+    window.show()
+    app.exec()
 
 def run_face_database_gui():
-    root = tk.Tk()
-    app = FaceDatabaseApp(root)
-    root.protocol("WM_DELETE_WINDOW", app.close_app)
-    root.mainloop()
-    
+    app = QApplication.instance() or QApplication(sys.argv)
+    apply_dark_theme(app)
+    window = FaceDatabaseApp()
+    window.show()
+    app.exec()
+
 
 def run_face_dbcleanup():
     remove_database()
-   
+
 
 def main():
     if len(sys.argv) == 1:
@@ -47,7 +59,7 @@ def main():
     else:
         # pass anything else not from above
         main_script()
-        
-        
+
+
 if __name__ == '__main__':
     main()

@@ -15,11 +15,8 @@ import platform
 from pedalboard import Gain, PitchShift, Pedalboard
 from pedalboard.io import AudioFile
 from tqdm import tqdm
-import tkinter as tk
 import sqlite3
 import re
-from tkinter import Tk
-from tkinter.filedialog import askdirectory
 
 
 try:
@@ -705,22 +702,22 @@ def parse_cli_args():
         args.fr_name = True
     
     if args.face_recog:
-        root = tk.Tk()
-        app = FaceDatabaseApp(root)
-        try:
-            root.protocol("WM_DELETE_WINDOW", app.close_app)
-            root.mainloop()
-        finally:
-            app.close_app()
-        
-    if args.face_gui:     
-        root = tk.Tk()
-        app = FaceDatabaseApp(root)
-        try:
-            root.protocol("WM_DELETE_WINDOW", app.close_app)
-            root.mainloop()
-        finally:
-            app.close_app()
+        from PyQt6.QtWidgets import QApplication
+        from anonfaces.gui.gui import apply_dark_theme
+        qt_app = QApplication.instance() or QApplication(sys.argv)
+        apply_dark_theme(qt_app)
+        db_window = FaceDatabaseApp()
+        db_window.show()
+        qt_app.exec()
+
+    if args.face_gui:
+        from PyQt6.QtWidgets import QApplication
+        from anonfaces.gui.gui import apply_dark_theme
+        qt_app = QApplication.instance() or QApplication(sys.argv)
+        apply_dark_theme(qt_app)
+        db_window = FaceDatabaseApp()
+        db_window.show()
+        qt_app.exec()
         exit(1)
         
     # Automatically enable keep_audio if distort_audio is set

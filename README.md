@@ -23,9 +23,7 @@ Original frame | `anonfaces` output (using default options)
 ## Installation
 
 `anonfaces` supports all commonly used operating systems (Linux, Windows, MacOS), can be either GUI or by using a command-line shell such as bash.
-Requires tkinter to be installed to run either command-line or gui. Windows installs by default. The GUI scale is off some, but functions fine.
-
-	sudo apt install python3-tk
+The GUI is built with **PyQt6** and includes a dark theme. PyQt6 is installed automatically as a dependency.
 
 Release Candidate only supports this revision directly from GitHub, from which you can run:
 

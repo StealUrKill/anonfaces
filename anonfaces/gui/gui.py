@@ -1,13 +1,34 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+import sys
+import os
 import shutil
 import threading
 import subprocess
-import signal
-import sys
-import os
-import platform
+import json as _json
 from datetime import datetime
+
+# Import onnxruntime before PyQt6 to avoid DLL conflicts on Windows.
+# When launched via anonfaces.py, providers are cached there before PyQt6 loads.
+_cached_providers = None
+try:
+    import onnxruntime as _ort
+    _cached_providers = _ort.get_available_providers() or []
+except Exception:
+    # Check if anonfaces.py already cached them before PyQt6 loaded
+    try:
+        import anonfaces.anonfaces as _entry
+        _cached_providers = getattr(_entry, '_cached_providers', None)
+    except Exception:
+        pass
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QLineEdit, QPushButton, QCheckBox,
+    QComboBox, QTextEdit, QProgressBar, QFileDialog, QMessageBox,
+    QDialog, QMenu
+)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QPalette, QColor, QFont, QTextCursor
+
 try:
     import anonfaces
     from anonfaces import __version__
@@ -18,855 +39,770 @@ except (ModuleNotFoundError, ImportError):
     import __init__ as anonfaces
     from __init__ import __version__
 
-class AnonymizationApp:
-    def __init__(self, root):
-        self.root = root
-        if root.tk.call("tk", "windowingsystem") == "x11": # linux needs special sizing for me. need input from others
-            scaling_factor = 1
-            root.tk.call('tk', 'scaling', scaling_factor)
-            default_font = ("TkDefaultFont", 8)
-            root.option_add("*Font", default_font)
-        window_width = 925
-        window_height = 800
-        self.root.title(f"Anonfaces Anonymization Tool - v{__version__}")  
-        self.log_text = None  # log widget is not ready initially
-        self.log_queue = []  # queue to store log messages before the form is ready
-        self.form_ready = False  # whether the form is fully initialized
-        
-        screen_width = root.winfo_screenwidth()
-        screen_height = root.winfo_screenheight()
-        
-        # find the x and y coordinates to center the window
-        position_x = (screen_width // 2) - (window_width // 2)
-        position_y = (screen_height // 2) - (window_height // 2)
-        
-        # set center of the window (widthxheight+x+y)
-        self.root.geometry(f"{window_width}x{window_height}+{position_x}+{position_y}")
-        
-        #disabling resize due to scaling issues - might look into creating new application later with auto sizing widgets and frames
-        self.root.resizable(False, False)
-        
-        self.tooltips_enabled = True # tooltip enabled by default
-        self.tooltips = []  # store all tooltips so i dont have to label all for the toggle.
-        
-        self.create_file_selection()
 
-        self.create_options()
+def apply_dark_theme(app):
+    """Apply a dark color palette to the QApplication."""
+    palette = QPalette()
+    dark = QColor(30, 30, 30)
+    darker = QColor(20, 20, 20)
+    mid = QColor(45, 45, 45)
+    white = QColor(210, 210, 210)
+    accent = QColor(42, 130, 218)
 
-        self.control_frame = tk.Frame(root)
-        self.control_frame.pack(pady=0)
-        
-        self.start_button = tk.Button(self.control_frame, text="Start Anonymization", command=self.start_anonymization)
-        self.start_button.pack(side=tk.LEFT, padx=5)
+    palette.setColor(QPalette.ColorRole.Window, dark)
+    palette.setColor(QPalette.ColorRole.WindowText, white)
+    palette.setColor(QPalette.ColorRole.Base, darker)
+    palette.setColor(QPalette.ColorRole.AlternateBase, mid)
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(50, 50, 50))
+    palette.setColor(QPalette.ColorRole.ToolTipText, white)
+    palette.setColor(QPalette.ColorRole.Text, white)
+    palette.setColor(QPalette.ColorRole.Button, mid)
+    palette.setColor(QPalette.ColorRole.ButtonText, white)
+    palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
+    palette.setColor(QPalette.ColorRole.Link, accent)
+    palette.setColor(QPalette.ColorRole.Highlight, accent)
+    palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.black)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
 
-        self.stop_button = tk.Button(self.control_frame, text="Stop Anonymization", command=self.stop_anonymization)
-        self.stop_button.pack(side=tk.LEFT, padx=5)
-
-        self.facedbgui_button = tk.Button(self.control_frame, text="Face Database GUI", command=self.facedbgui_launch)
-        self.facedbgui_button.pack(side=tk.LEFT, padx=5)
-        
-        self.clearoptions_button = tk.Button(self.control_frame, text="Clear All Options", command=self.clear_options_launch)
-        self.clearoptions_button.pack(side=tk.LEFT, padx=5)
-        
-        self.convertaudio_button = tk.Button(self.control_frame, text="Convert Audio", command=self.convert_audio_launch)
-        self.convertaudio_button.pack(side=tk.LEFT, padx=5)
-        self.tooltips.append(ToolTip(self.convertaudio_button, "Convert video using the selected video and audio codecs."))
-        
-        self.progress = ttk.Progressbar(root, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x", pady=5)
-
-        #self.log_text = tk.Text(root, width=98, height=15, state="disabled")
-        #made the log text somewhat smaller to keep the width down. left stock above
-        self.log_text = tk.Text(root, width=130, height=14, state="disabled", font=("TkDefaultFont", 9))
-        self.log_text.pack(pady=0)
-        
-        # right-click menu (popup menu)
-        self.log_menu = tk.Menu(self.log_text, tearoff=0)
-        self.log_menu.add_command(label="Copy", command=self.copy_log)
-        self.log_menu.add_command(label="Save", command=self.save_log)
-
-        # right-click event to the log_text widget
-        self.log_text.bind("<Button-3>", self.show_log_menu)
-        
-        # stdout and stderr to the log_text
-        sys.stdout = TextRedirector(self.log_text, "stdout")
-        sys.stderr = TextRedirector(self.log_text, "stderr")
-        
-        # the GUI initialized set form_ready to True
-        self.form_ready = True
-    
-        # handle any queued log messages after form is ready
-        self.process_log_queue()
-
-        
-    def copy_log(self):
-        # Enable log_text temporarily to copy the content
-        self.log_text.config(state="normal")
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.log_text.get("1.0", tk.END))
-        self.log_text.config(state="disabled")
+    app.setPalette(palette)
+    app.setStyleSheet("""
+        QToolTip {
+            color: #d2d2d2; background-color: #3a3a3a;
+            border: 1px solid #5a5a5a; padding: 4px;
+        }
+        QProgressBar {
+            border: 1px solid #3a3a3a; border-radius: 3px;
+            text-align: center; background-color: #1e1e1e;
+        }
+        QProgressBar::chunk { background-color: #2a82da; border-radius: 2px; }
+        QComboBox { padding: 3px 8px; }
+        QComboBox QAbstractItemView {
+            background-color: #2d2d2d; selection-background-color: #2a82da;
+        }
+        QPushButton {
+            padding: 5px 12px; border: 1px solid #3a3a3a;
+            border-radius: 3px; background-color: #3a3a3a;
+        }
+        QPushButton:hover { background-color: #4a4a4a; }
+        QPushButton:pressed { background-color: #2a82da; }
+        QLineEdit {
+            padding: 4px; border: 1px solid #3a3a3a; border-radius: 3px;
+        }
+        QCheckBox::indicator { width: 16px; height: 16px; }
+        QTextEdit { border: 1px solid #3a3a3a; border-radius: 3px; }
+        QMenu { background-color: #2d2d2d; border: 1px solid #3a3a3a; }
+        QMenu::item:selected { background-color: #2a82da; }
+    """)
 
 
-    def save_log(self):
-        # auto-populate the file name with app name, version, and current date in the save field
-        app_name = "Anonfaces"
-        version = __version__  # Version from your module
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        default_filename = f"{app_name}_v{version}_{current_date}.txt"
+class AnonymizationApp(QMainWindow):
+    _log_signal = pyqtSignal(str)
 
-        # open the file dialog to save the log content
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".txt", 
-            filetypes=[("Text files", "*.txt")],
-            initialfile=default_filename  # Set the default filename
-        )
-        if file_path:
-            # enable log_text temporarily to read the content
-            self.log_text.config(state="normal")
-            with open(file_path, 'w') as f:
-                f.write(self.log_text.get("1.0", tk.END))
-            self.log_text.config(state="disabled")
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"Anonfaces Anonymization Tool - v{__version__}")
+        self.setFixedSize(950, 830)
+        self._center_on_screen()
 
+        self.process = None
+        self.process_stopped = False
+        self.tooltips_enabled = True
+        self._tooltip_store = {}
 
-    def show_log_menu(self, event):
-        # shows the right-click log menu at the current mouse position
-        try:
-            self.log_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.log_menu.grab_release()
+        central = QWidget()
+        self.setCentralWidget(central)
+        self.main_layout = QVBoxLayout(central)
+        self.main_layout.setSpacing(6)
+        self.main_layout.setContentsMargins(10, 10, 10, 10)
 
-    
-    def show_help(self):
-        help_text = """
-        Anonfaces Anonymization Tool - Info:
-    
-        1. Input:
-           File path(s) or camera device name. It is possible to pass multiple paths by separating them
-           by spaces or by using shell expansion (e.g. `$ anonfaces vids/*.mp4`). Alternatively, you
-           can pass a directory as input, and all files in the directory will be used. If a camera is
-           installed, start a live demo with `$ anonfaces cam` (shortcut for `$ anonfaces -p '<video0>'`).
-           
-           INFO:
-           Short press to open file, long press to open directory.
-           Automatically clears output if an output extension is present when input directory is set.
-           Automatically clears output if an output directory is present when input file is set.
-                       
-        2. Output:
-           Output file name. Defaults to input path + postfix "_anonymized".
-           
-           INFO:
-           Automatically switches between file and directory from input.
-           If a file is selected from the input, only the name of the file is needed as the output will
-           automatically match the extension from the input file.
-            
-        3. Threshold:
-           Detection threshold. Default is 0.2.
-            
-        4. Scale:
-           Downscale images for inference. Format WxH (e.g., scale 1280x720).
-            
-        5. Preview:
-           Enable live preview GUI (may reduce performance).
-            
-        6. Boxes:
-           Use boxes instead of ellipse masks.
-            
-        7. Detection Scores:
-           Draw detection scores onto outputs.
-            
-        8. Mask Scale:
-           Scale factor for face masks. Default: 1.3.
-            
-        9. Replace With:
-           Face anonymization filter mode. Options: 'blur', 'solid', 'none', 'img', 'mosaic'. Default: 'blur'.
-            
-        10. Replace Image:
-            Custom image for face replacement (requires replacewith img).
-            
-        11. Mosaic Size:
-            Mosaic size for face replacement. Default: 20.
-            
-        12. Face Recognition:
-            Face Recognition: Enable face recognition to not blur faces in Face GUI Database..
-            Face Recognition Name: Enable face recognition names from image name in Face GUI Database.
-            Face Recognition GUI: Launch face database GUI.
-            Face Recognition Threshold: Set face recognition cosine similarity threshold (higher = stricter). Default: 0.45.
-            
-        13. Audio:
-            Distort Audio: Enable audio distortion in output video. This applies --keep-audio but will not work with --copy-acodec.
-            Keep Audio: Keep audio from the video source.
-            Copy Audio Codec: Keep the audio codec from the source.
-            
-        14. Video Codec:
-            Select video encoder. mpeg4 (MPEG-4 Part 2, fast, widely compatible, default),
-            libx264 (H.264, better compression), libsvtav1 (AV1, royalty-free, best compression, slower),
-            libvpx-vp9 (VP9, royalty-free, broadly supported). Default: mpeg4.
+        self._create_file_selection()
+        self._create_options()
+        self._create_control_buttons()
+        self._create_progress_bar()
+        self._create_log_output()
 
-        15. Audio Codec:
-            Select audio encoder for --keep-audio. aac (default, widely compatible),
-            libmp3lame (MP3), libopus (royalty-free, excellent quality). Default: aac.
+        self._log_signal.connect(self._append_log)
 
-        16. FFmpeg Config:
-            Additional FFmpeg encoding options in JSON notation.
-            Example: {"fps": 10, "bitrate": "1000k"}
-            See https://ffmpeg.org/ffmpeg-codecs.html for more options
-            
-        17. Backend:
-            Select ONNX model execution backend. Options: 'auto', 'onnxrt', 'opencv'. Default: 'auto'.
+        # Long press timer for input button
+        self._select_type = "file"
+        self._long_press_timer = QTimer()
+        self._long_press_timer.setSingleShot(True)
+        self._long_press_timer.timeout.connect(self._switch_to_directory)
 
-        18. Execution Provider:
-            Override the ONNX runtime execution provider. Only used if backend is onnxrt.
-            If not specified, the presumably fastest available one will be automatically selected.
-            See - https://onnxruntime.ai/docs/execution-providers/
+    # ── helpers ──────────────────────────────────────────────────────
 
-        19. Additional Options:
-            Show Info: Show file input/output locations and ffmpeg command.
-            Keep Metadata: Keep metadata from the original image. Default: False.
-        """
+    def _center_on_screen(self):
+        screen = QApplication.primaryScreen().geometry()
+        x = (screen.width() - self.width()) // 2
+        y = (screen.height() - self.height()) // 2
+        self.move(x, y)
 
-        help_window = tk.Toplevel(self.root)
-        help_window.title("Help")
-        
-        window_width = 950
-        window_height = 750
-    
-        # get the screen dimensions to calculate the center position
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-    
-        # find the x and y coordinates to center the window
-        position_x = (screen_width // 2) - (window_width // 2)
-        position_y = (screen_height // 2) - (window_height // 2)
-    
-        # set center of the window (widthxheight+x+y)
-        help_window.geometry(f"{window_width}x{window_height}+{position_x}+{position_y}")
-        
-        # deciding to disable resize due to scaling issues.
-        help_window.resizable(False, False)
-        
-        # frame to hold the text and scrollbar
-        frame = tk.Frame(help_window)
-        frame.pack(fill="both", expand=True)
-    
-        scrollbar = tk.Scrollbar(frame)
-        scrollbar.pack(side="right", fill="y")
-    
-        # widget for the help text
-        text_widget = tk.Text(frame, wrap="word", yscrollcommand=scrollbar.set)
-        text_widget.pack(side="left", fill="both", expand=True)
-    
-        # help text
-        text_widget.insert(tk.END, help_text)
-    
-        # scrollbar for the text widget
-        scrollbar.config(command=text_widget.yview)
-    
-        # text selection and copying but disable editing
-        def disable_editing(event):
-            return "break"  #prevents text from being modified
-    
-        # set certain keys to disable editing
-        text_widget.bind("<Key>", disable_editing)
-        text_widget.bind("<BackSpace>", disable_editing)
-        text_widget.bind("<Delete>", disable_editing)
-    
-        # ctrl+c to copy the selected text
-        text_widget.bind("<Control-c>", lambda e: text_widget.event_generate("<<Copy>>"))
-    
-        # right-click (context) menu for copying
-        def show_context_menu(event):
-            context_menu.tk_popup(event.x_root, event.y_root)
-    
-        context_menu = tk.Menu(help_window, tearoff=0)
-        context_menu.add_command(label="Copy", command=lambda: text_widget.event_generate("<<Copy>>"))
-    
-        # right-click to show the context menu
-        text_widget.bind("<Button-3>", show_context_menu)
-    
-        close_button = ttk.Button(help_window, text="Close", command=help_window.destroy)
-        close_button.pack(pady=10)
-    
-        # help window modal
-        help_window.transient(self.root)
-        help_window.grab_set()
-    
-    
-    def create_file_selection(self):
-        self.file_frame = tk.Frame(self.root)
-        self.file_frame.pack(pady=10, fill="x")
+    def _register_tooltip(self, widget, text):
+        widget.setToolTip(text)
+        self._tooltip_store[widget] = text
 
-        self.help_button = tk.Button(self.file_frame, text="Help", command=self.show_help)
-        self.help_button.place(x=740, y=7, height=26)
-        
-        # toggle button to enable/disable tooltips
-        self.toggle_button = tk.Button(self.file_frame, text="Toogle Tooltips", command=self.toggle_tooltips)
-        self.toggle_button.place(x=683.5, y=42, height=26)
+    @staticmethod
+    def _get_execution_providers():
+        if _cached_providers:
+            return _cached_providers
+        return ["onnxruntime not available"]
 
-        self.input_entry = tk.Entry(self.file_frame, width=70)
-        self.input_entry.place(x=120, y=7, height=24, width=470)
-        self.tooltips.append(ToolTip(self.input_entry, "To use cam, input cam here."))
+    # ── file selection area ──────────────────────────────────────────
 
-        self.output_entry = tk.Entry(self.file_frame, width=70)
-        self.output_entry.place(x=120, y=42, height=26, width=470)
+    def _create_file_selection(self):
+        file_frame = QWidget()
+        layout = QGridLayout(file_frame)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        self.output_button = tk.Button(self.file_frame, text="Output", command=self.browse_output)
-        self.output_button.grid(row=1, column=0, padx=40, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.output_button, 
-            """Automatically switches between file and directory from input.
-If file is selected, only the name of the file is needed as the
-output will automatically match the extension from the input."""
-            ))
+        # Input row
+        self.select_button = QPushButton("Input")
+        self.select_button.setFixedWidth(90)
+        self.select_button.pressed.connect(self._start_long_press)
+        self.select_button.released.connect(self._end_long_press)
+        self._register_tooltip(self.select_button,
+            "Short press to open file, long press to open directory.\n"
+            "Automatically clears output if output extension is present.")
 
-        # switches between input and directory - names kept short
-        self.select_type = tk.StringVar(value="file")
-        self.select_button = tk.Button(self.file_frame, text="Input", command=self.select_path)
-        self.select_button.grid(row=0, column=0, padx=40, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.select_button,
-            """Short press to open file, long press to open directory.
-Automatically clears output is output extension is present"""
-            ))
-        self.select_button.bind('<ButtonPress-1>', self.start_long_press)
-        self.select_button.bind('<ButtonRelease-1>', self.end_long_press)
+        self.input_entry = QLineEdit()
+        self.input_entry.setPlaceholderText("File path or 'cam' for webcam...")
+        self._register_tooltip(self.input_entry, "To use cam, input cam here.")
 
-        self.long_press_timer = None
-        self.long_press_duration = 300
+        # Output row
+        self.output_button = QPushButton("Output")
+        self.output_button.setFixedWidth(90)
+        self.output_button.clicked.connect(self._browse_output)
+        self._register_tooltip(self.output_button,
+            "Automatically switches between file and directory from input.\n"
+            "If file is selected, only the name is needed as the output\n"
+            "will automatically match the extension from the input.")
 
+        self.output_entry = QLineEdit()
+        self.output_entry.setPlaceholderText("Output path (defaults to input + _anonymized)...")
 
+        # Help / Toggle buttons
+        self.help_button = QPushButton("Help")
+        self.help_button.setFixedWidth(80)
+        self.help_button.clicked.connect(self._show_help)
 
-    def create_options(self):
-        self.options_frame = tk.Frame(self.root)
-        self.options_frame.pack(pady=10, fill="x")  # fill="x" makes the frame expand horizontally
-        
-        self.options_frame.columnconfigure(0, weight=1)
-        #self.options_frame.columnconfigure(1, weight=1)
-        #self.options_frame.columnconfigure(2, weight=1)
-        self.options_frame.columnconfigure(3, weight=1)
+        self.toggle_button = QPushButton("Toggle Tooltips")
+        self.toggle_button.setFixedWidth(115)
+        self.toggle_button.clicked.connect(self._toggle_tooltips)
 
-        # right column options/checkboxes
-        self.preview_var = tk.BooleanVar()
-        self.preview_check = tk.Checkbutton(self.options_frame, text="Enable Preview", variable=self.preview_var)
-        self.preview_check.grid(row=0, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.preview_check, "Enable live preview GUI (can decrease performance)."))
+        layout.addWidget(self.select_button, 0, 0)
+        layout.addWidget(self.input_entry, 0, 1)
+        layout.addWidget(self.help_button, 0, 2)
+        layout.addWidget(self.output_button, 1, 0)
+        layout.addWidget(self.output_entry, 1, 1)
+        layout.addWidget(self.toggle_button, 1, 2)
 
-        self.boxes_var = tk.BooleanVar()
-        self.boxes_check = tk.Checkbutton(self.options_frame, text="Use Boxes Instead of Ellipse", variable=self.boxes_var)
-        self.boxes_check.grid(row=1, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.boxes_check, "Use boxes instead of ellipse masks."))
+        self.main_layout.addWidget(file_frame)
 
-        self.draw_scores_var = tk.BooleanVar()
-        self.draw_scores_check = tk.Checkbutton(self.options_frame, text="Draw Detection Scores", variable=self.draw_scores_var)
-        self.draw_scores_check.grid(row=2, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.draw_scores_check, "Draw detection scores onto outputs and previews."))
+    # ── options grid ─────────────────────────────────────────────────
 
-        self.face_recog_var = tk.BooleanVar()
-        self.face_recog_check = tk.Checkbutton(self.options_frame, text="Enable Face Recognition", variable=self.face_recog_var)
-        self.face_recog_check.grid(row=3, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.face_recog_check, "Enable face recognition to not blur faces in Face GUI Database."))
+    def _create_options(self):
+        options_frame = QWidget()
+        grid = QGridLayout(options_frame)
+        grid.setSpacing(6)
+        grid.setContentsMargins(5, 5, 5, 5)
 
-        self.fr_name_var = tk.BooleanVar()
-        self.fr_name_check = tk.Checkbutton(self.options_frame, text="Enable Face Recognition With Names", variable=self.fr_name_var)
-        self.fr_name_check.grid(row=4, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.fr_name_check, "Enable face recognition names from image name in Face GUI Database."))
+        # -- left column: labels + entries/combos (cols 0-1) --
+        row = 0
 
-        self.distort_audio_var = tk.BooleanVar()
-        self.distort_audio_check = tk.Checkbutton(self.options_frame, text="Distort Audio", variable=self.distort_audio_var)
-        self.distort_audio_check.grid(row=5, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.distort_audio_check, "Enable audio distortion for the output video. Applies pitch shift and gain effects to the audio."))
+        lbl = QLabel("Detection Threshold:")
+        self._register_tooltip(lbl, "Detection threshold (tune this to trade off between\nfalse positive and false negative rate). Default: 0.2")
+        grid.addWidget(lbl, row, 0)
+        self.thresh_entry = QLineEdit()
+        self.thresh_entry.setFixedWidth(140)
+        self._register_tooltip(self.thresh_entry, "Detection threshold. Default: 0.2")
+        grid.addWidget(self.thresh_entry, row, 1)
+        row += 1
 
-        self.keep_audio_var = tk.BooleanVar()
-        self.keep_audio_check = tk.Checkbutton(self.options_frame, text="Keep Audio", variable=self.keep_audio_var)
-        self.keep_audio_check.grid(row=6, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.keep_audio_check, "Keep audio from video source file and copy it over to the output (only applies to videos)."))
+        lbl = QLabel("Scale (WxH):")
+        self._register_tooltip(lbl, "Downscale images for network inference\n(format: WxH, example: 1280x720).\nClick to set default, double-click to clear.")
+        lbl.mousePressEvent = lambda e: self.scale_entry.setText("1280x720") if e.button() == Qt.MouseButton.LeftButton else None
+        lbl.mouseDoubleClickEvent = lambda e: self.scale_entry.clear()
+        grid.addWidget(lbl, row, 0)
+        self.scale_entry = QLineEdit()
+        self.scale_entry.setFixedWidth(140)
+        self._register_tooltip(self.scale_entry, "Downscale images for network inference (format: WxH).")
+        grid.addWidget(self.scale_entry, row, 1)
+        row += 1
 
-        self.copy_acodec_var = tk.BooleanVar()
-        self.copy_acodec_check = tk.Checkbutton(self.options_frame, text="Copy Audio Codec", variable=self.copy_acodec_var)
-        self.copy_acodec_check.grid(row=7, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.copy_acodec_check, "Keep the audio codec from video source file."))
-        
-        self.info_var = tk.BooleanVar()
-        self.info_check = tk.Checkbutton(self.options_frame, text="Show Info", variable=self.info_var)
-        self.info_check.grid(row=8, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.info_check, "Shows file input/output location and ffmpeg command. Default is off the clear clutter."))
+        lbl = QLabel("Replace With:")
+        self._register_tooltip(lbl, 'Anonymization filter mode.\n"blur", "solid", "none", "img", "mosaic". Default: "blur".')
+        grid.addWidget(lbl, row, 0)
+        self.replacewith_combo = QComboBox()
+        self.replacewith_combo.addItems(["", "blur", "solid", "none", "img", "mosaic"])
+        self.replacewith_combo.setFixedWidth(140)
+        self._register_tooltip(self.replacewith_combo, 'Anonymization filter mode. Default: "blur".')
+        grid.addWidget(self.replacewith_combo, row, 1)
+        row += 1
 
-        self.keep_metadata_var = tk.BooleanVar()
-        self.keep_metadata_check = tk.Checkbutton(self.options_frame, text="Keep Metadata", variable=self.keep_metadata_var)
-        self.keep_metadata_check.grid(row=9, column=2, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.keep_metadata_check, "Keep metadata of the original image. Default : False."))
+        self.replaceimg_button = QPushButton("Replace Image")
+        self.replaceimg_button.clicked.connect(self._browse_replaceimg)
+        self._register_tooltip(self.replaceimg_button, "Anonymization image for face regions.\nRequires replacewith img option.")
+        grid.addWidget(self.replaceimg_button, row, 0)
+        self.replaceimg_entry = QLineEdit()
+        self._register_tooltip(self.replaceimg_entry, "Anonymization image for face regions.\nRequires replacewith img option.")
+        grid.addWidget(self.replaceimg_entry, row, 1)
+        row += 1
 
-        # left colummn options
-        self.thresh_label = tk.Label(self.options_frame, text="Detection Threshold:")
-        self.thresh_label.grid(row=0, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.thresh_label, "Detection threshold (tune this to trade off between false positive and false negative rate). Default: 0.2"))
-        
-        self.thresh_entry = tk.Entry(self.options_frame, width=17)
-        self.thresh_entry.grid(row=0, column=1, padx=197, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.thresh_entry, "Detection threshold (tune this to trade off between false positive and false negative rate). Default: 0.2"))
-        
-        self.scale_label = tk.Label(self.options_frame, text="Scale (WxH):")
-        self.scale_label.grid(row=1, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.scale_label,
-            """Downscale images for network inference to this size (format: WxH, example: 1280x720).
-Single click to add default 1280x720 or double click to remove"""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
-        
-        # Bind left-click to insert default value into entry box
-        # Single click inserts "1280x720"
-        self.scale_label.bind("<Button-1>", lambda event: (self.scale_entry.delete(0, tk.END), self.scale_entry.insert(0, "1280x720")))
-        
-        # Double-click clears the input field
-        self.scale_label.bind("<Double-Button-1>", lambda event: self.scale_entry.delete(0, tk.END))
-        
-        self.scale_entry = tk.Entry(self.options_frame, width=17)
-        self.scale_entry.grid(row=1, column=1, padx=197, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.scale_entry, "Downscale images for network inference to this size (format: WxH, example: 1280x720)."))
+        lbl = QLabel("Mosaic Size:")
+        self._register_tooltip(lbl, "Setting the mosaic size.\nRequires replacewith mosaic. Default: 20")
+        grid.addWidget(lbl, row, 0)
+        self.mosaicsize_entry = QLineEdit()
+        self.mosaicsize_entry.setFixedWidth(140)
+        self._register_tooltip(self.mosaicsize_entry, "Mosaic size. Default: 20")
+        grid.addWidget(self.mosaicsize_entry, row, 1)
+        row += 1
 
-        self.replacewith_label = tk.Label(self.options_frame, text="Replace With:")
-        self.replacewith_label.grid(row=2, column=1, padx=0, pady=5, sticky="w")  
-        self.tooltips.append(ToolTip(self.replacewith_label, 
-            """Anonymization filter mode for face regions. "blur" applies a strong
-gaussian blurring, "solid" draws a solid black box, "none" leaves the
-input unchanged, "img" replaces the face with a custom image, and
-"mosaic" replaces the face with mosaic. Default: "blur"."""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
+        lbl = QLabel("Mask Scale:")
+        self._register_tooltip(lbl, "Scale factor for face masks.\nDefault: 1.3.")
+        grid.addWidget(lbl, row, 0)
+        self.maskscale_entry = QLineEdit()
+        self.maskscale_entry.setFixedWidth(140)
+        self._register_tooltip(self.maskscale_entry, "Mask scale factor. Default: 1.3.")
+        grid.addWidget(self.maskscale_entry, row, 1)
+        row += 1
 
-        self.replacewith_var = tk.StringVar(value="")
-        self.replacewith_menu = tk.OptionMenu(self.options_frame, self.replacewith_var, "blur", "solid", "none", "img", "mosaic")
-        self.replacewith_menu.grid(row=2, column=1, padx=194, pady=5, sticky="w")
-        self.replacewith_menu.config(width=11)
-        self.tooltips.append(MenuToolTip(self.replacewith_menu, 
-            """Anonymization filter mode for face regions. "blur" applies a strong
-gaussian blurring, "solid" draws a solid black box, "none" leaves the
-input unchanged, "img" replaces the face with a custom image, and
-"mosaic" replaces the face with mosaic. Default: "blur"."""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
+        lbl = QLabel("Face Recog. Threshold:")
+        self._register_tooltip(lbl, "Face recognition cosine similarity threshold\n(higher = stricter). Default: 0.45")
+        grid.addWidget(lbl, row, 0)
+        self.fr_thresh_entry = QLineEdit()
+        self.fr_thresh_entry.setFixedWidth(140)
+        self._register_tooltip(self.fr_thresh_entry, "Face recognition threshold. Default: 0.45")
+        grid.addWidget(self.fr_thresh_entry, row, 1)
+        row += 1
 
-        self.replaceimg_button = tk.Button(self.options_frame, text="Replace Image", command=self.browse_replaceimg)
-        self.replaceimg_button.grid(row=3, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.replaceimg_button, "Anonymization image for face regions. Requires --replacewith img option from above"))
-        
-        self.replaceimg_entry = tk.Entry(self.options_frame, width=33)
-        self.replaceimg_entry.grid(row=3, column=1, padx=100, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.replaceimg_entry, "Anonymization image for face regions. Requires --replacewith img option from above"))
-        
-        self.mosaicsize_label = tk.Label(self.options_frame, text="Mosaic Size:")
-        self.mosaicsize_label.grid(row=4, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.mosaicsize_label, "Setting the mosaic size. Requires --replacewith mosaic option from above. Default: 20"))
-        
-        self.mosaicsize_entry = tk.Entry(self.options_frame, width=17)
-        self.mosaicsize_entry.grid(row=4, column=1, padx=197, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.mosaicsize_entry, "Setting the mosaic size. Requires --replacewith mosaic option from above. Default: 20"))
-        
-        self.maskscale_label = tk.Label(self.options_frame, text="Mask Scale:")
-        self.maskscale_label.grid(row=5, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.maskscale_label, "Scale factor for face masks, to make sure that masks cover the complete face. Default: 1.3."))
-        
-        self.maskscale_entry = tk.Entry(self.options_frame, width=17)
-        self.maskscale_entry.grid(row=5, column=1, padx=197, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.maskscale_entry, "Scale factor for face masks, to make sure that masks cover the complete face. Default: 1.3."))
+        lbl = QLabel("Backend:")
+        self._register_tooltip(lbl, "Backend for ONNX model execution.\nDefault: auto (prefer onnxrt if available)")
+        grid.addWidget(lbl, row, 0)
+        self.backend_combo = QComboBox()
+        self.backend_combo.addItems(["", "auto", "onnxrt", "opencv"])
+        self.backend_combo.setFixedWidth(140)
+        self._register_tooltip(self.backend_combo, "Backend for ONNX model execution. Default: auto")
+        grid.addWidget(self.backend_combo, row, 1)
+        row += 1
 
-        self.fr_thresh_label = tk.Label(self.options_frame, text="Face Recognition Threshold:")
-        self.fr_thresh_label.grid(row=6, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.fr_thresh_label, "Set the face recognition threshold. Default is 0.60"))
-        
-        self.fr_thresh_entry = tk.Entry(self.options_frame, width=17)
-        self.fr_thresh_entry.grid(row=6, column=1, padx=197, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.fr_thresh_entry, "Set the face recognition threshold. Default is 0.60"))
+        lbl = QLabel("Execution Provider:")
+        self._register_tooltip(lbl, "Override onnxrt execution provider.\nSee https://onnxruntime.ai/docs/execution-providers/")
+        grid.addWidget(lbl, row, 0)
+        self.ep_combo = QComboBox()
+        self.ep_combo.addItem("")
+        self.ep_combo.addItems(self._get_execution_providers())
+        self.ep_combo.setMinimumWidth(220)
+        self._register_tooltip(self.ep_combo, "Override onnxrt execution provider.\nOnly used if backend is onnxrt.")
+        grid.addWidget(self.ep_combo, row, 1)
+        row += 1
 
-        self.backend_label = tk.Label(self.options_frame, text="Backend:")
-        self.backend_label.grid(row=7, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.backend_label, "Backend for ONNX model execution. Default: auto (prefer onnxrt if available)"))
-        
-        self.backend_var = tk.StringVar(value="")
-        self.backend_menu = tk.OptionMenu(self.options_frame, self.backend_var, "auto", "onnxrt", "opencv")
-        self.backend_menu.grid(row=7, column=1, padx=194, pady=5, sticky="w")
-        self.backend_menu.config(width=11)
-        self.tooltips.append(MenuToolTip(self.backend_menu, "Backend for ONNX model execution. Default: auto (prefer onnxrt if available)"))
+        lbl = QLabel("Video Codec:")
+        self._register_tooltip(lbl, "Video encoder.\nmpeg4 (MPEG-4 Part 2) — fast, widely compatible (default).\n"
+            "libx264 (H.264) — better compression.\nlibsvtav1 (AV1) — royalty-free, best compression, slower.\n"
+            "libvpx-vp9 (VP9) — royalty-free, broadly supported.")
+        grid.addWidget(lbl, row, 0)
+        self.vcodec_combo = QComboBox()
+        self.vcodec_combo.addItems(["mpeg4", "libx264", "libsvtav1", "libvpx-vp9"])
+        self.vcodec_combo.setFixedWidth(140)
+        self._register_tooltip(self.vcodec_combo, "Video encoder. Default: mpeg4")
+        grid.addWidget(self.vcodec_combo, row, 1)
+        row += 1
 
-        self.ep_label = tk.Label(self.options_frame, text="Execution Provider:")
-        self.ep_label.grid(row=8, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.ep_label, 
-            """Override onnxrt execution provider see
-https://onnxruntime.ai/docs/execution-providers/
-If not specified, the presumably fastest available one will
-be automatically selected. Only used if backend is onnxrt"""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
+        lbl = QLabel("Audio Codec:")
+        self._register_tooltip(lbl, "Audio encoder.\naac (default), libmp3lame (MP3),\nlibopus (royalty-free, excellent quality).")
+        grid.addWidget(lbl, row, 0)
+        self.acodec_combo = QComboBox()
+        self.acodec_combo.addItems(["aac", "libmp3lame", "libopus"])
+        self.acodec_combo.setFixedWidth(140)
+        self._register_tooltip(self.acodec_combo, "Audio encoder. Default: aac")
+        grid.addWidget(self.acodec_combo, row, 1)
+        row += 1
 
-        available_providers = self.get_available_execution_providers()
-        self.ep_var = tk.StringVar(value="")
-        self.ep_menu = tk.OptionMenu(self.options_frame, self.ep_var, *available_providers)
-        self.ep_menu.grid(row=8, column=1, padx=110, pady=5, sticky="w")
-        self.ep_menu.config(width=25)
-        self.tooltips.append(MenuToolTip(self.ep_menu, 
-            """Override onnxrt execution provider see
-https://onnxruntime.ai/docs/execution-providers/
-If not specified, the presumably fastest available one will
-be automatically selected. Only used if backend is onnxrt"""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
+        lbl = QLabel("FFmpeg Config (JSON):")
+        self._register_tooltip(lbl, 'Additional FFMPEG config in JSON notation.\nExample: {"fps": 10, "bitrate": "1000k"}\nVideo/audio codecs are set by the dropdowns above.')
+        grid.addWidget(lbl, row, 0)
+        self.ffmpeg_config_entry = QLineEdit()
+        self._register_tooltip(self.ffmpeg_config_entry, 'Additional FFMPEG config in JSON.\nExample: {"fps": 10, "bitrate": "1000k"}')
+        grid.addWidget(self.ffmpeg_config_entry, row, 1)
 
-        # Video Codec dropdown
-        self.vcodec_label = tk.Label(self.options_frame, text="Video Codec:")
-        self.vcodec_label.grid(row=9, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.vcodec_label,
-            """Video encoder. mpeg4 (MPEG-4 Part 2) is fast and widely compatible (default).
-libx264 (H.264) offers better compression.
-libsvtav1 (AV1) is royalty-free with best compression but slower.
-libvpx-vp9 (VP9) is royalty-free and broadly supported."""))
+        # -- right column: checkboxes (col 3) --
+        chk_row = 0
 
-        self.vcodec_var = tk.StringVar(value="mpeg4")
-        self.vcodec_menu = tk.OptionMenu(self.options_frame, self.vcodec_var, "mpeg4", "libx264", "libsvtav1", "libvpx-vp9")
-        self.vcodec_menu.grid(row=9, column=1, padx=110, pady=5, sticky="w")
-        self.vcodec_menu.config(width=15)
-        self.tooltips.append(MenuToolTip(self.vcodec_menu,
-            """Video encoder. mpeg4 (MPEG-4 Part 2) is fast and widely compatible (default).
-libx264 (H.264) offers better compression.
-libsvtav1 (AV1) is royalty-free with best compression but slower.
-libvpx-vp9 (VP9) is royalty-free and broadly supported."""))
+        self.preview_check = QCheckBox("Enable Preview")
+        self._register_tooltip(self.preview_check, "Enable live preview GUI (can decrease performance).")
+        grid.addWidget(self.preview_check, chk_row, 3)
+        chk_row += 1
 
-        # Audio Codec dropdown
-        self.acodec_label = tk.Label(self.options_frame, text="Audio Codec:")
-        self.acodec_label.grid(row=10, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.acodec_label,
-            """Audio encoder for --keep-audio. aac is the default.
-libmp3lame encodes MP3. libopus is royalty-free with excellent quality."""))
+        self.boxes_check = QCheckBox("Use Boxes Instead of Ellipse")
+        self._register_tooltip(self.boxes_check, "Use boxes instead of ellipse masks.")
+        grid.addWidget(self.boxes_check, chk_row, 3)
+        chk_row += 1
 
-        self.acodec_var = tk.StringVar(value="aac")
-        self.acodec_menu = tk.OptionMenu(self.options_frame, self.acodec_var, "aac", "libmp3lame", "libopus")
-        self.acodec_menu.grid(row=10, column=1, padx=110, pady=5, sticky="w")
-        self.acodec_menu.config(width=15)
-        self.tooltips.append(MenuToolTip(self.acodec_menu,
-            """Audio encoder for --keep-audio. aac is the default.
-libmp3lame encodes MP3. libopus is royalty-free with excellent quality."""))
+        self.draw_scores_check = QCheckBox("Draw Detection Scores")
+        self._register_tooltip(self.draw_scores_check, "Draw detection scores onto outputs and previews.")
+        grid.addWidget(self.draw_scores_check, chk_row, 3)
+        chk_row += 1
 
-        self.ffmpeg_config_label = tk.Label(self.options_frame, text="FFmpeg Config (JSON):")
-        self.ffmpeg_config_label.grid(row=11, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.ffmpeg_config_label,
-            """Additional FFMPEG config in JSON notation.
-Overrides for fps, bitrate, pix_fmt, etc.
-Example: {"fps": 10, "bitrate": "1000k"}
-The video codec is set by the Video Codec dropdown above."""
-            ))
+        self.face_recog_check = QCheckBox("Enable Face Recognition")
+        self._register_tooltip(self.face_recog_check, "Enable face recognition to not blur\nfaces in Face GUI Database.")
+        grid.addWidget(self.face_recog_check, chk_row, 3)
+        chk_row += 1
 
-        self.ffmpeg_config_entry = tk.Entry(self.options_frame, width=27)
-        self.ffmpeg_config_entry.grid(row=11, column=1, padx=136, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.ffmpeg_config_entry,
-            """Additional FFMPEG config in JSON notation.
-Overrides for fps, bitrate, pix_fmt, etc.
-Example: {"fps": 10, "bitrate": "1000k"}
-The video codec is set by the Video Codec dropdown above."""
-            ))
-        
+        self.fr_name_check = QCheckBox("Enable Face Recog. With Names")
+        self._register_tooltip(self.fr_name_check, "Enable face recognition names from\nimage name in Face GUI Database.")
+        grid.addWidget(self.fr_name_check, chk_row, 3)
+        chk_row += 1
 
-    def get_available_execution_providers(self):
-        try:
-            import onnx
-            import onnxruntime
-            providers = onnxruntime.get_available_providers()
-            return providers if providers else ["No Providers Available"]
-        except ImportError as e:
-            self.log_message(f"Import Error: {e}")
-            # onnxruntime is not installed, return this message
-            return ["onnxruntime not available"]
-        except Exception as e:
-            # incase onnxruntime is not available or fails
-            print(f"Error retrieving providers: {e}")
-            return ["No Providers Available"]
-   
-   
-    def start_long_press(self, event):
-        # timer from create_file_selection
-        self.long_press_timer = self.root.after(self.long_press_duration, self.switch_to_directory)
+        self.distort_audio_check = QCheckBox("Distort Audio")
+        self._register_tooltip(self.distort_audio_check, "Enable audio distortion for the output video.\nApplies pitch shift and gain effects.")
+        grid.addWidget(self.distort_audio_check, chk_row, 3)
+        chk_row += 1
 
+        self.keep_audio_check = QCheckBox("Keep Audio")
+        self._register_tooltip(self.keep_audio_check, "Keep audio from video source file\n(only applies to videos).")
+        grid.addWidget(self.keep_audio_check, chk_row, 3)
+        chk_row += 1
 
-    def end_long_press(self, event):
-        # cancels long press if button was released before timer
-        if self.long_press_timer:
-            self.root.after_cancel(self.long_press_timer)
-            self.long_press_timer = None
-            # normal button click
-            if self.select_type.get() == "file":
-                self.select_path()
+        self.copy_acodec_check = QCheckBox("Copy Audio Codec")
+        self._register_tooltip(self.copy_acodec_check, "Keep the audio codec from video source file.")
+        grid.addWidget(self.copy_acodec_check, chk_row, 3)
+        chk_row += 1
 
+        self.info_check = QCheckBox("Show Info")
+        self._register_tooltip(self.info_check, "Shows file input/output location and ffmpeg command.")
+        grid.addWidget(self.info_check, chk_row, 3)
+        chk_row += 1
 
-    def switch_to_directory(self):
-        # switches to directory to keep gui clean
-        self.select_type.set("directory")
-        self.select_button.config(text="Directory")
+        self.keep_metadata_check = QCheckBox("Keep Metadata")
+        self._register_tooltip(self.keep_metadata_check, "Keep metadata of the original image. Default: False.")
+        grid.addWidget(self.keep_metadata_check, chk_row, 3)
 
-  
-    def select_path(self):
-        output_path = self.output_entry.get()
-        if self.select_type.get() == "file":
-            input_path = filedialog.askopenfilename()
-            if input_path:
-                self.input_entry.delete(0, tk.END)
-                self.input_entry.insert(0, input_path)
-                if os.path.isdir(output_path):
-                    # clears the output_entry if the current output has a file extension input the input is a directory
-                    messagebox.showinfo("File Selected", "Input file detected! \n\nClearing output due to output directory set.")
-                    self.output_entry.delete(0, tk.END)                
-        else:
-            input_path = filedialog.askdirectory()
-            if input_path:
-                self.input_entry.delete(0, tk.END)
-                self.input_entry.insert(0, input_path)
-                
-                # clears output_entry if input is a directory and output contains a file extension
-                output_path = self.output_entry.get()
-                if output_path and os.path.splitext(output_path)[1]:  # Check if the output path has an extension
-                    messagebox.showinfo("Directory Selected", "Output extension detected!\n\nClearing output due to input directory set.")
-                    self.output_entry.delete(0, tk.END)                
-        # resets the button back to a file selection after completing the action
-        self.select_type.set("file")
-        self.select_button.config(text="Input")
+        # spacer column between left and right sides
+        grid.setColumnStretch(2, 1)
 
-    
-    def browse_output(self):
-        input_path = self.input_entry.get()
-        if input_path:
-            # check if the input path is a directory and ask to set output as a directory
-            if os.path.isdir(input_path):
-                messagebox.showinfo("Directory Selected", "Input directory detected! \n\nPlease choose an output directory.")
-                output_dir = filedialog.askdirectory(title="Select Output Directory")
-                
-                if output_dir:
-                    self.output_entry.delete(0, tk.END)
-                    self.output_entry.insert(0, output_dir)
-                    
-            else:
-                # if it's a file, get the file extension
-                input_ext = os.path.splitext(input_path)[1]
-                output_path = filedialog.asksaveasfilename(title="Select Output File")
-                
-                # if output file is selected, append the input file extension to the output file extension if needed
-                if output_path:
-                    if not output_path.endswith(input_ext):
-                        output_path += input_ext
-                    
-                    self.output_entry.delete(0, tk.END)
-                    self.output_entry.insert(0, output_path)
+        self.main_layout.addWidget(options_frame)
 
+    # ── control buttons ──────────────────────────────────────────────
 
-    def toggle_tooltips(self):
-        self.tooltips_enabled = not self.tooltips_enabled
-        for tooltip in self.tooltips:
-            tooltip.toggle(self.tooltips_enabled)
+    def _create_control_buttons(self):
+        btn_frame = QWidget()
+        btn_layout = QHBoxLayout(btn_frame)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
 
-        # update the tooltip button text
-        if self.tooltips_enabled:
-            self.toggle_button.config(text="Disable Tooltips")
-        else:
-            self.toggle_button.config(text="Enable Tooltips")
-    
-    
-    def browse_replaceimg(self):
-        replaceimg_path = filedialog.askopenfilename(title="Select Replace Image")
-        self.replaceimg_entry.delete(0, tk.END)
-        self.replaceimg_entry.insert(0, replaceimg_path)
- 
- 
-    def facedbgui_launch(self):
-        cmd = [sys.executable, "-m", "anonfaces", "--face-gui"]
-        subprocess.run(cmd)
-        
+        self.start_button = QPushButton("Start Anonymization")
+        self.start_button.clicked.connect(self._start_anonymization)
+        btn_layout.addWidget(self.start_button)
+
+        self.stop_button = QPushButton("Stop Anonymization")
+        self.stop_button.clicked.connect(self._stop_anonymization)
+        btn_layout.addWidget(self.stop_button)
+
+        self.facedb_button = QPushButton("Face Database GUI")
+        self.facedb_button.clicked.connect(self._facedbgui_launch)
+        btn_layout.addWidget(self.facedb_button)
+
+        self.clear_button = QPushButton("Clear All Options")
+        self.clear_button.clicked.connect(self._clear_options)
+        btn_layout.addWidget(self.clear_button)
+
+        self.convert_button = QPushButton("Convert Audio")
+        self.convert_button.clicked.connect(self._convert_audio_launch)
+        self._register_tooltip(self.convert_button, "Convert video using the selected video and audio codecs.")
+        btn_layout.addWidget(self.convert_button)
+
+        self.main_layout.addWidget(btn_frame)
+
+    # ── progress bar ─────────────────────────────────────────────────
+
+    def _create_progress_bar(self):
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(False)
+        self.main_layout.addWidget(self.progress)
+
+    # ── log output ───────────────────────────────────────────────────
+
+    def _create_log_output(self):
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QFont("Consolas", 9))
+        self.log_text.setMinimumHeight(200)
+
+        self.log_text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.log_text.customContextMenuRequested.connect(self._show_log_menu)
+
+        self.main_layout.addWidget(self.log_text, stretch=1)
+
+    # ── log helpers ──────────────────────────────────────────────────
 
     def log_message(self, message):
-        if not self.form_ready:
-            # queue message if the form is not ready
-            self.log_queue.append(message)
+        self._log_signal.emit(message)
+
+    def _append_log(self, message):
+        self.log_text.append(message)
+        self.log_text.moveCursor(QTextCursor.MoveOperation.End)
+
+    def _clear_log(self):
+        self.log_text.clear()
+
+    def _show_log_menu(self, pos):
+        menu = QMenu(self)
+        menu.addAction("Copy All", self._copy_log)
+        menu.addAction("Save Log...", self._save_log)
+        menu.exec(self.log_text.mapToGlobal(pos))
+
+    def _copy_log(self):
+        QApplication.clipboard().setText(self.log_text.toPlainText())
+
+    def _save_log(self):
+        app_name = "Anonfaces"
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        default_name = f"{app_name}_v{__version__}_{current_date}.txt"
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Log", default_name, "Text files (*.txt)")
+        if path:
+            with open(path, 'w') as f:
+                f.write(self.log_text.toPlainText())
+
+    # ── progress helpers ─────────────────────────────────────────────
+
+    def _start_progress(self):
+        self.progress.setRange(0, 0)
+        self.progress.setVisible(True)
+
+    def _stop_progress(self):
+        self.progress.setVisible(False)
+
+    # ── tooltip toggle ───────────────────────────────────────────────
+
+    def _toggle_tooltips(self):
+        self.tooltips_enabled = not self.tooltips_enabled
+        for widget, text in self._tooltip_store.items():
+            widget.setToolTip(text if self.tooltips_enabled else "")
+        self.toggle_button.setText(
+            "Disable Tooltips" if self.tooltips_enabled else "Enable Tooltips")
+
+    # ── long press input button ──────────────────────────────────────
+
+    def _start_long_press(self):
+        self._long_press_timer.start(300)
+
+    def _end_long_press(self):
+        if self._long_press_timer.isActive():
+            self._long_press_timer.stop()
+        self._select_path()
+
+    def _switch_to_directory(self):
+        self._select_type = "directory"
+        self.select_button.setText("Directory")
+
+    # ── file/directory selection ─────────────────────────────────────
+
+    def _select_path(self):
+        output_path = self.output_entry.text()
+        if self._select_type == "file":
+            input_path, _ = QFileDialog.getOpenFileName(self, "Select Input File")
+            if input_path:
+                self.input_entry.setText(input_path)
+                if os.path.isdir(output_path):
+                    QMessageBox.information(self, "File Selected",
+                        "Input file detected!\n\nClearing output due to output directory set.")
+                    self.output_entry.clear()
         else:
-            # send message to the log widget
-            self.log_text.config(state="normal")
-            self.log_text.insert(tk.END, message + "\n")
-            self.log_text.see(tk.END)
-            self.log_text.config(state="disabled")
+            input_path = QFileDialog.getExistingDirectory(self, "Select Input Directory")
+            if input_path:
+                self.input_entry.setText(input_path)
+                output_path = self.output_entry.text()
+                if output_path and os.path.splitext(output_path)[1]:
+                    QMessageBox.information(self, "Directory Selected",
+                        "Output extension detected!\n\nClearing output due to input directory set.")
+                    self.output_entry.clear()
 
+        self._select_type = "file"
+        self.select_button.setText("Input")
 
-    def process_log_queue(self):
-        if self.form_ready:
-            for message in self.log_queue:
-                self.log_text.config(state="normal")
-                self.log_text.insert(tk.END, message + "\n")
-                self.log_text.see(tk.END)
-                self.log_text.config(state="disabled")
-            #  clear queue after processing
-            self.log_queue.clear()
+    def _browse_output(self):
+        input_path = self.input_entry.text()
+        if not input_path:
+            return
+        if os.path.isdir(input_path):
+            QMessageBox.information(self, "Directory Selected",
+                "Input directory detected!\n\nPlease choose an output directory.")
+            output_dir = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+            if output_dir:
+                self.output_entry.setText(output_dir)
+        else:
+            input_ext = os.path.splitext(input_path)[1]
+            output_path, _ = QFileDialog.getSaveFileName(self, "Select Output File")
+            if output_path:
+                if not output_path.endswith(input_ext):
+                    output_path += input_ext
+                self.output_entry.setText(output_path)
 
-    
-    def clear_log(self):
-        self.log_text.config(state="normal")
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state="disabled")
+    def _browse_replaceimg(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Replace Image",
+            filter="Image files (*.jpg *.jpeg *.png *.bmp)")
+        if path:
+            self.replaceimg_entry.setText(path)
 
+    # ── face database GUI launch ─────────────────────────────────────
 
-    def start_anonymization(self):
-        self.clear_log()
-        options = self.collect_options()
-        threading.Thread(target=self.run_anonymization, args=(options,)).start()
+    def _facedbgui_launch(self):
+        cmd = [sys.executable, "-m", "anonfaces", "dbgui"]
+        subprocess.run(cmd)
 
+    # ── help window ──────────────────────────────────────────────────
 
-    def stop_anonymization(self):
-        if hasattr(self, 'process') and self.process is not None:
-            if self.process.poll() is None:
-                try:
-                    self.log_message("Attempting to stop the process...")
-                    if platform.system() == "Windows":
-                        #import win32api
-                        #import win32con
-                        # CTRL+C to stop it from main.py script
-                        #win32api.GenerateConsoleCtrlEvent(win32con.CTRL_C_EVENT, 0)
-                        #seems to work without this now.
-                        self.process_stopped = True
-                    else:
-                        self.process.terminate()
-                        self.process_stopped = True
-                except ImportError as e:
-                    self.log_message(f"Import Error: {e}")
-                except Exception as e:
-                    self.log_message(f"Error stopping the process: {e}")
-                finally:
-                    self.process.terminate()
-                    self.process.wait()
-                    self.process = None
-                    self.progress.stop()
-                    self.log_message("Anonymization stopped.")
-    
-    
-    def clear_options_launch(self):
-        # clears the file selection fields
-        self.input_entry.delete(0, tk.END)
-        self.output_entry.delete(0, tk.END)
-        self.replaceimg_entry.delete(0, tk.END)
+    def _show_help(self):
+        help_text = """
+    Anonfaces Anonymization Tool - Info:
 
-        # set the options fields
-        self.thresh_entry.delete(0, tk.END)
-        self.scale_entry.delete(0, tk.END)
-        self.mosaicsize_entry.delete(0, tk.END)
-        self.maskscale_entry.delete(0, tk.END)
-        self.fr_thresh_entry.delete(0, tk.END)
-        self.ffmpeg_config_entry.delete(0, tk.END)
+    1. Input:
+       File path(s) or camera device name. It is possible to pass multiple paths by separating them
+       by spaces or by using shell expansion (e.g. `$ anonfaces vids/*.mp4`). Alternatively, you
+       can pass a directory as input, and all files in the directory will be used. If a camera is
+       installed, start a live demo with `$ anonfaces cam` (shortcut for `$ anonfaces -p '<video0>'`).
 
-        # set checkboxes to unchecked
-        self.preview_var.set(False)
-        self.boxes_var.set(False)
-        self.draw_scores_var.set(False)
-        self.face_recog_var.set(False)
-        self.fr_name_var.set(False)
-        self.distort_audio_var.set(False)
-        self.keep_audio_var.set(False)
-        self.copy_acodec_var.set(False)
-        self.info_var.set(False)
-        self.keep_metadata_var.set(False)
+       INFO:
+       Short press to open file, long press to open directory.
+       Automatically clears output if an output extension is present when input directory is set.
+       Automatically clears output if an output directory is present when input file is set.
 
-        # set options with menus to default values
-        self.replacewith_var.set("")
-        self.backend_var.set("")
-        self.ep_var.set("")
-        self.vcodec_var.set("mpeg4")
-        self.acodec_var.set("aac")
-        
+    2. Output:
+       Output file name. Defaults to input path + postfix "_anonymized".
 
-    def convert_audio_launch(self):
-        self.clear_log()
-        # Find the FFmpeg executable
-        ffmpeg_path = self.find_ffmpeg_path()
+       INFO:
+       Automatically switches between file and directory from input.
+       If a file is selected from the input, only the name of the file is needed as the output will
+       automatically match the extension from the input file.
 
+    3. Threshold:
+       Detection threshold. Default is 0.2.
+
+    4. Scale:
+       Downscale images for inference. Format WxH (e.g., scale 1280x720).
+
+    5. Preview:
+       Enable live preview GUI (may reduce performance).
+
+    6. Boxes:
+       Use boxes instead of ellipse masks.
+
+    7. Detection Scores:
+       Draw detection scores onto outputs.
+
+    8. Mask Scale:
+       Scale factor for face masks. Default: 1.3.
+
+    9. Replace With:
+       Face anonymization filter mode. Options: 'blur', 'solid', 'none', 'img', 'mosaic'. Default: 'blur'.
+
+    10. Replace Image:
+        Custom image for face replacement (requires replacewith img).
+
+    11. Mosaic Size:
+        Mosaic size for face replacement. Default: 20.
+
+    12. Face Recognition:
+        Face Recognition: Enable face recognition to not blur faces in Face GUI Database.
+        Face Recognition Name: Enable face recognition names from image name in Face GUI Database.
+        Face Recognition GUI: Launch face database GUI.
+        Face Recognition Threshold: Set face recognition cosine similarity threshold
+        (higher = stricter). Default: 0.45.
+
+    13. Audio:
+        Distort Audio: Enable audio distortion in output video.
+            This applies --keep-audio but will not work with --copy-acodec.
+        Keep Audio: Keep audio from the video source.
+        Copy Audio Codec: Keep the audio codec from the source.
+
+    14. Video Codec:
+        Select video encoder. mpeg4 (MPEG-4 Part 2, fast, widely compatible, default),
+        libx264 (H.264, better compression), libsvtav1 (AV1, royalty-free, best compression, slower),
+        libvpx-vp9 (VP9, royalty-free, broadly supported). Default: mpeg4.
+
+    15. Audio Codec:
+        Select audio encoder for --keep-audio. aac (default, widely compatible),
+        libmp3lame (MP3), libopus (royalty-free, excellent quality). Default: aac.
+
+    16. FFmpeg Config:
+        Additional FFmpeg encoding options in JSON notation.
+        Example: {"fps": 10, "bitrate": "1000k"}
+        See https://ffmpeg.org/ffmpeg-codecs.html for more options
+
+    17. Backend:
+        Select ONNX model execution backend. Options: 'auto', 'onnxrt', 'opencv'. Default: 'auto'.
+
+    18. Execution Provider:
+        Override the ONNX runtime execution provider. Only used if backend is onnxrt.
+        If not specified, the presumably fastest available one will be automatically selected.
+        See - https://onnxruntime.ai/docs/execution-providers/
+
+    19. Additional Options:
+        Show Info: Show file input/output locations and ffmpeg command.
+        Keep Metadata: Keep metadata from the original image. Default: False.
+        """
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Help")
+        dlg.setFixedSize(950, 750)
+
+        layout = QVBoxLayout(dlg)
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setFont(QFont("Consolas", 10))
+        text_edit.setPlainText(help_text)
+        layout.addWidget(text_edit)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.close)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Center on screen
+        screen = QApplication.primaryScreen().geometry()
+        dlg.move((screen.width() - dlg.width()) // 2,
+                 (screen.height() - dlg.height()) // 2)
+        dlg.exec()
+
+    # ── clear all options ────────────────────────────────────────────
+
+    def _clear_options(self):
+        self.input_entry.clear()
+        self.output_entry.clear()
+        self.replaceimg_entry.clear()
+        self.thresh_entry.clear()
+        self.scale_entry.clear()
+        self.mosaicsize_entry.clear()
+        self.maskscale_entry.clear()
+        self.fr_thresh_entry.clear()
+        self.ffmpeg_config_entry.clear()
+
+        self.preview_check.setChecked(False)
+        self.boxes_check.setChecked(False)
+        self.draw_scores_check.setChecked(False)
+        self.face_recog_check.setChecked(False)
+        self.fr_name_check.setChecked(False)
+        self.distort_audio_check.setChecked(False)
+        self.keep_audio_check.setChecked(False)
+        self.copy_acodec_check.setChecked(False)
+        self.info_check.setChecked(False)
+        self.keep_metadata_check.setChecked(False)
+
+        self.replacewith_combo.setCurrentIndex(0)
+        self.backend_combo.setCurrentIndex(0)
+        self.ep_combo.setCurrentIndex(0)
+        self.vcodec_combo.setCurrentText("mpeg4")
+        self.acodec_combo.setCurrentText("aac")
+
+    # ── convert audio ────────────────────────────────────────────────
+
+    def _convert_audio_launch(self):
+        self._clear_log()
+        ffmpeg_path = shutil.which('ffmpeg')
         if not ffmpeg_path:
             self.log_message("FFmpeg executable not found. Ensure ffmpeg is installed and on your system PATH.")
             return
-    
-        # Get input file path from GUI
-        inputFilePath = self.input_entry.get()
-    
-        if not inputFilePath:
+
+        input_path = self.input_entry.text()
+        if not input_path:
             self.log_message("Please select an input file before converting audio.")
             return
-    
-        # Generate output file path with "_converted" before the extension
-        input_dir, input_filename = os.path.split(inputFilePath)
+
+        input_dir, input_filename = os.path.split(input_path)
         input_name, input_ext = os.path.splitext(input_filename)
-        outputFilePath = os.path.join(input_dir, f"{input_name}_converted{input_ext}")
-        self.progress.start()
-        # Construct the FFmpeg command using selected codecs
-        vcodec = self.vcodec_var.get() or "mpeg4"
-        acodec = self.acodec_var.get() or "aac"
-        ffmpegCommand = [
-            ffmpeg_path, "-y", "-i", inputFilePath,
-            "-c:v", vcodec, "-crf", "23", "-c:a", acodec, "-q:a", "100", "-sn", "-vf", "yadif", outputFilePath
+        output_path = os.path.join(input_dir, f"{input_name}_converted{input_ext}")
+
+        self._start_progress()
+        vcodec = self.vcodec_combo.currentText() or "mpeg4"
+        acodec = self.acodec_combo.currentText() or "aac"
+        cmd = [
+            ffmpeg_path, "-y", "-i", input_path,
+            "-c:v", vcodec, "-crf", "23",
+            "-c:a", acodec, "-q:a", "100",
+            "-sn", "-vf", "yadif", output_path
         ]
-    
-        self.log_message(f"Running FFmpeg command: {' '.join(ffmpegCommand)}")
-    
+        self.log_message(f"Running FFmpeg command: {' '.join(cmd)}")
+
         def run_ffmpeg():
-            """Runs FFmpeg and logs output asynchronously."""
             try:
                 self.process = subprocess.Popen(
-                    ffmpegCommand, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-                )
-    
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 for line in iter(self.process.stderr.readline, ""):
                     self.log_message(line.strip())
-    
                 self.process.wait()
-    
                 if self.process.returncode == 0:
-                    self.log_message(f"Audio conversion completed successfully. Output file: {outputFilePath}")
+                    self.log_message(f"Audio conversion completed successfully. Output file: {output_path}")
                 else:
                     self.log_message(f"Error in audio conversion: {self.process.stderr.read()}")
-    
             except Exception as e:
                 self.log_message(f"An error occurred while running FFmpeg: {e}")
             finally:
-                self.progress.stop()
-                self.process = None  # process is set to None after completion
-    
-        # Run FFmpeg in a separate thread so GUI remains responsive
+                self._stop_progress()
+                self.process = None
+
         threading.Thread(target=run_ffmpeg, daemon=True).start()
 
-    
-    
-    def find_ffmpeg_path(self):
-        # Find ffmpeg on system PATH
-        return shutil.which('ffmpeg')
-    
+    # ── start/stop anonymization ─────────────────────────────────────
 
+    def _start_anonymization(self):
+        self._clear_log()
+        options = self._collect_options()
+        threading.Thread(target=self._run_anonymization, args=(options,)).start()
 
-    def collect_options(self):
-        options = {
-            "input": self.input_entry.get(),
-            "output": self.output_entry.get(),
-            "thresh": self.thresh_entry.get(),
-            "scale": self.scale_entry.get(),
-            "replacewith": self.replacewith_var.get(),
-            "replaceimg": self.replaceimg_entry.get(),
-            "mosaicsize": self.mosaicsize_entry.get(),
-            "mask_scale": self.maskscale_entry.get(),
-            "face_recog": self.face_recog_var.get(),
-            "fr_name": self.fr_name_var.get(),
-            "distort_audio": self.distort_audio_var.get(),
-            "keep_audio": self.keep_audio_var.get(),
-            "copy_acodec": self.copy_acodec_var.get(),
-            "fr_thresh": self.fr_thresh_entry.get(),
-            "backend": self.backend_var.get(),
-            "execution_provider": self.ep_var.get(),
-            "vcodec": self.vcodec_var.get(),
-            "acodec": self.acodec_var.get(),
-            "ffmpeg_config": self.ffmpeg_config_entry.get(),
-            "info": self.info_var.get(),
-            "keep_metadata": self.keep_metadata_var.get(),
-            "preview": self.preview_var.get(),
-            "boxes": self.boxes_var.get(),
-            "draw_scores": self.draw_scores_var.get(),
+    def _stop_anonymization(self):
+        if self.process is not None and self.process.poll() is None:
+            try:
+                self.log_message("Attempting to stop the process...")
+                self.process_stopped = True
+                self.process.terminate()
+                self.process.wait()
+            except Exception as e:
+                self.log_message(f"Error stopping the process: {e}")
+            finally:
+                self.process = None
+                self._stop_progress()
+                self.log_message("Anonymization stopped.")
+
+    # ── collect options ──────────────────────────────────────────────
+
+    def _collect_options(self):
+        return {
+            "input": self.input_entry.text(),
+            "output": self.output_entry.text(),
+            "thresh": self.thresh_entry.text(),
+            "scale": self.scale_entry.text(),
+            "replacewith": self.replacewith_combo.currentText(),
+            "replaceimg": self.replaceimg_entry.text(),
+            "mosaicsize": self.mosaicsize_entry.text(),
+            "mask_scale": self.maskscale_entry.text(),
+            "face_recog": self.face_recog_check.isChecked(),
+            "fr_name": self.fr_name_check.isChecked(),
+            "distort_audio": self.distort_audio_check.isChecked(),
+            "keep_audio": self.keep_audio_check.isChecked(),
+            "copy_acodec": self.copy_acodec_check.isChecked(),
+            "fr_thresh": self.fr_thresh_entry.text(),
+            "backend": self.backend_combo.currentText(),
+            "execution_provider": self.ep_combo.currentText(),
+            "vcodec": self.vcodec_combo.currentText(),
+            "acodec": self.acodec_combo.currentText(),
+            "ffmpeg_config": self.ffmpeg_config_entry.text(),
+            "info": self.info_check.isChecked(),
+            "keep_metadata": self.keep_metadata_check.isChecked(),
+            "preview": self.preview_check.isChecked(),
+            "boxes": self.boxes_check.isChecked(),
+            "draw_scores": self.draw_scores_check.isChecked(),
         }
-        return options
 
+    # ── run anonymization subprocess ─────────────────────────────────
 
-    def run_anonymization(self, options):
+    def _run_anonymization(self, options):
         self.log_message("Starting anonymization...")
-        self.progress.start()
+        self._start_progress()
         self.process_stopped = False
 
         args = []
-
         if options["input"]:
             args.append(options["input"])
         if options["output"]:
@@ -899,8 +835,8 @@ The video codec is set by the Video Codec dropdown above."""
             args.extend(["--backend", options["backend"]])
         if options["execution_provider"]:
             args.extend(["--execution-provider", options["execution_provider"]])
+
         # Build ffmpeg-config JSON merging codec dropdowns + manual entry
-        import json as _json
         ffmpeg_cfg = {}
         if options["ffmpeg_config"]:
             try:
@@ -913,6 +849,7 @@ The video codec is set by the Video Codec dropdown above."""
             ffmpeg_cfg["acodec"] = options["acodec"]
         if ffmpeg_cfg:
             args.extend(["--ffmpeg-config", _json.dumps(ffmpeg_cfg)])
+
         if options["info"]:
             args.append("--info")
         if options["keep_metadata"]:
@@ -923,140 +860,42 @@ The video codec is set by the Video Codec dropdown above."""
             args.append("--boxes")
         if options["draw_scores"]:
             args.append("--draw-scores")
-        
-        # Run via the current Python interpreter to ensure we use local source
+
         pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         cmd = [sys.executable, "-m", "anonfaces"] + args
 
-        def monitor_process():
-            try:
-                self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=os.path.dirname(pkg_dir))
-    
-                def read_stdout():
-                    for line in iter(self.process.stdout.readline, ''):
-                        self.log_message(line.strip())
-    
-                # seems normal output is stderr here...
-                def read_stderr():
-                    for line in iter(self.process.stderr.readline, ''):
-                        self.log_message(line.strip())
-    
-                # begin threads to read stdout and stderr
-                stdout_thread = threading.Thread(target=read_stdout, daemon=True)
-                stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-    
-                stdout_thread.start()
-                stderr_thread.start()
-    
-                # waitting for the process to finish in the separate thread
-                self.process.wait()
-    
-                if not self.process_stopped:
-                    self.log_message("Anonymization completed successfully.")
-            except Exception as e:
-                self.log_message(f"An error occurred: {e}")
-            finally:
-                self.progress.stop()
-                self.process = None  # process is set to None after completion
-            
-        threading.Thread(target=monitor_process, daemon=True).start()
+        try:
+            self.process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, cwd=os.path.dirname(pkg_dir))
 
+            def read_stdout():
+                for line in iter(self.process.stdout.readline, ''):
+                    self.log_message(line.strip())
 
-class TextRedirector:
-    #redirects stdout and stderr to log_text
-    def __init__(self, widget, tag="stdout"):
-        self.widget = widget
-        self.tag = tag
+            def read_stderr():
+                for line in iter(self.process.stderr.readline, ''):
+                    self.log_message(line.strip())
 
-    def write(self, message):
-        self.widget.config(state="normal")
-        self.widget.insert(tk.END, message)
-        self.widget.see(tk.END)
-        self.widget.config(state="disabled")
+            stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
 
-    def flush(self):
-        pass  #needed to ensure compatibility with sys.stdout
+            self.process.wait()
 
-
-class ToolTip:
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tooltip_window = None
-        self.enabled = True  # tooltip enabled by default
-        self.widget.bind("<Enter>", self.show_tooltip)
-        self.widget.bind("<Leave>", self.hide_tooltip)
-
-    def show_tooltip(self, event=None):
-        if not self.enabled:  # check if tooltips are enabled
-            return
-        if self.tooltip_window or not self.text:
-            return
-
-        x, y, cx, cy = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 40
-        y += self.widget.winfo_rooty() + 40
-
-        self.tooltip_window = tk.Toplevel(self.widget)
-        self.tooltip_window.wm_overrideredirect(True)  # removes window decorations
-        self.tooltip_window.wm_geometry(f"+{x}+{y}")
-
-        label = tk.Label(self.tooltip_window, text=self.text, background="yellow", relief="solid", borderwidth=1)
-        label.pack()
-
-    def hide_tooltip(self, event=None):
-        if self.tooltip_window:
-            self.tooltip_window.destroy()
-            self.tooltip_window = None
-
-    def toggle(self, enabled):
-        self.enabled = enabled
-
-
-class MenuToolTip:
-    def __init__(self, widget, text, delay=1000):
-        self.widget = widget
-        self.text = text
-        self.tooltip_window = None
-        self.delay = delay
-        self.show_tooltip_id = None
-        self.enabled = True  # tooltip enabled by default
-        self.widget.bind("<Enter>", self.schedule_tooltip)
-        self.widget.bind("<Leave>", self.hide_tooltip)
-
-    def schedule_tooltip(self, event=None):
-        self.show_tooltip_id = self.widget.after(self.delay, self.show_tooltip)
-
-    def show_tooltip(self, event=None):
-        if not self.enabled:  # check if tooltips are enabled
-            return
-        if self.tooltip_window or not self.text:
-            return
-
-        x, y, cx, cy = self.widget.bbox("insert")
-        x += self.widget.winfo_rootx() + 40
-        y += self.widget.winfo_rooty() + 40
-
-        self.tooltip_window = tk.Toplevel(self.widget)
-        self.tooltip_window.wm_overrideredirect(True)  # removes window decorations
-        self.tooltip_window.wm_geometry(f"+{x}+{y}")
-
-        label = tk.Label(self.tooltip_window, text=self.text, background="yellow", relief="solid", borderwidth=1)
-        label.pack()
-
-    def hide_tooltip(self, event=None):
-        if self.show_tooltip_id:
-            self.widget.after_cancel(self.show_tooltip_id)
-            self.show_tooltip_id = None
-        if self.tooltip_window:
-            self.tooltip_window.destroy()
-            self.tooltip_window = None
-            
-    def toggle(self, enabled):
-        self.enabled = enabled
+            if not self.process_stopped:
+                self.log_message("Anonymization completed successfully.")
+        except Exception as e:
+            self.log_message(f"An error occurred: {e}")
+        finally:
+            self._stop_progress()
+            self.process = None
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = AnonymizationApp(root)
-    root.mainloop()
+    app = QApplication.instance() or QApplication(sys.argv)
+    apply_dark_theme(app)
+    window = AnonymizationApp()
+    window.show()
+    sys.exit(app.exec())
