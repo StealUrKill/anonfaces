@@ -121,6 +121,26 @@ class ArcFaceONNX:
             embedding = embedding / norm
         return embedding
 
+    def get_embeddings_batch(self, aligned_faces):
+        """Compute 512-D face embeddings for a batch of aligned faces in one inference call.
+
+        Args:
+            aligned_faces: list of 112x112 RGB images (uint8)
+
+        Returns:
+            (N, 512) array of L2-normalized embedding vectors
+        """
+        if len(aligned_faces) == 0:
+            return np.empty((0, 512), dtype=np.float32)
+        batch = np.stack([
+            np.transpose((face.astype(np.float32) - 127.5) / 127.5, (2, 0, 1))
+            for face in aligned_faces
+        ])  # (N, 3, 112, 112)
+        embeddings = self.session.run([self.output_name], {self.input_name: batch})[0]
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-10)
+        return embeddings / norms
+
     def compute_similarity(self, emb1, emb2):
         """Cosine similarity between two L2-normalized embeddings."""
         return float(np.dot(emb1, emb2))

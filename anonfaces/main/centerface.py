@@ -155,25 +155,33 @@ class CenterFace:
         scale0, scale1 = scale[0, 0, :, :], scale[0, 1, :, :]
         offset0, offset1 = offset[0, 0, :, :], offset[0, 1, :, :]
         c0, c1 = np.where(heatmap > threshold)
-        boxes, lms = [], []
         if len(c0) > 0:
-            for i in range(len(c0)):
-                s0, s1 = np.exp(scale0[c0[i], c1[i]]) * 4, np.exp(scale1[c0[i], c1[i]]) * 4
-                o0, o1 = offset0[c0[i], c1[i]], offset1[c0[i], c1[i]]
-                s = heatmap[c0[i], c1[i]]
-                x1, y1 = max(0, (c1[i] + o1 + 0.5) * 4 - s1 / 2), max(0, (c0[i] + o0 + 0.5) * 4 - s0 / 2)
-                x1, y1 = min(x1, size[1]), min(y1, size[0])
-                boxes.append([x1, y1, min(x1 + s1, size[1]), min(y1 + s0, size[0]), s])
-                lm = []
-                for j in range(5):
-                    lm.append(landmark[0, j * 2 + 1, c0[i], c1[i]] * s1 + x1)
-                    lm.append(landmark[0, j * 2, c0[i], c1[i]] * s0 + y1)
-                lms.append(lm)
-            boxes = np.asarray(boxes, dtype=np.float32)
-            lms = np.asarray(lms, dtype=np.float32)
+            # Vectorized decode — no Python loop over detections
+            s0 = np.exp(scale0[c0, c1]) * 4
+            s1 = np.exp(scale1[c0, c1]) * 4
+            o0 = offset0[c0, c1]
+            o1 = offset1[c0, c1]
+            scores = heatmap[c0, c1]
+
+            x1 = np.clip((c1 + o1 + 0.5) * 4 - s1 / 2, 0, size[1])
+            y1 = np.clip((c0 + o0 + 0.5) * 4 - s0 / 2, 0, size[0])
+            x2 = np.minimum(x1 + s1, size[1])
+            y2 = np.minimum(y1 + s0, size[0])
+
+            boxes = np.stack([x1, y1, x2, y2, scores], axis=1).astype(np.float32)
+
+            # Vectorized landmark decode
+            lms = np.empty((len(c0), 10), dtype=np.float32)
+            for j in range(5):
+                lms[:, j * 2]     = landmark[0, j * 2 + 1, c0, c1] * s1 + x1
+                lms[:, j * 2 + 1] = landmark[0, j * 2,     c0, c1] * s0 + y1
+
             keep = self.nms(boxes[:, :4], boxes[:, 4], 0.3)
             boxes = boxes[keep, :]
             lms = lms[keep, :]
+        else:
+            boxes = np.empty(shape=[0, 5], dtype=np.float32)
+            lms = np.empty(shape=[0, 10], dtype=np.float32)
         return boxes, lms
 
     @staticmethod

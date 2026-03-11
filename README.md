@@ -1,15 +1,12 @@
 
-# `anonfaces`: Video/Image anonymization by face detection with beta face recognition Release Candidate Branch
+# `anonfaces`: Video/Image anonymization by face detection with face recognition Release Candidate Branch
 
 `anonfaces` is a simple command-line tool for automatic anonymization of faces in videos or photos.
 It works by first detecting all human faces in each video frame and then applying an anonymization filter (blurring or black boxes) on each detected face region.
-By default all audio tracks are removed, if kept they are encoded as mp3 (libmp3lame), unless specified as --copy-acodec to copy codecs.
+By default all audio tracks are removed. If kept, audio is encoded as AAC by default (configurable to MP3 or Opus via `--ffmpeg-config`), unless `--copy-acodec` is specified to copy codecs as-is.
 
-`Face Recognition has now been imbedded via DLIB and prebuilt DLIB models.`
-This is still a slow process and more optimization should help.
-Please see credits and usage example for more info.
-### You will need Visual Studio and CMake to build `DLIB` unless you use prebuilts - https://github.com/z-mahmud22/Dlib_Windows_Python3.x
-### Install `DLIB` before installing `anonfaces`
+Face recognition is powered by **ArcFace** (w600k_r50 ONNX model), which auto-downloads on first use (~166MB). No C++ compiler or external libraries required — just `pip install` and go.
+CenterFace landmarks are reused directly for face alignment, so there is no redundant detection step.
 
 ### GUI is now included. This is at a beta stage at this moment.
 You can still run anonfaces in command-line and you can access the gui via `anonfaces gui` from the command line.
@@ -63,7 +60,7 @@ If you have a camera (webcam) attached to your computer, you can run `anonfaces`
 
     anonfaces cam
 
-This is a shortcut for `$ anonfaces --preview '<video0>'`, where `'<video0>'` (literal) is a  camera device identifier. If you have multiple cameras installed, you can try `'<videoN>'`, where `N` is the index of the camera (see [imageio-ffmpeg docs](https://imageio.readthedocs.io/en/stable/format_ffmpeg.html)).
+This is a shortcut for `$ anonfaces --preview '<video0>'`, where `'<video0>'` (literal) is a camera device identifier. If you have multiple cameras installed, you can try `'<videoN>'`, where `N` is the index of the camera.
 
 ### CLI usage and options summary
 
@@ -130,20 +127,20 @@ optional arguments:
   --frn, -frn           Enable both face recognition and name labeling from 
                         image names.
   --fr-thresh FR_THRESH, -ft FR_THRESH
-                        Set the face recognition threshold. Default is 0.60 and 
-                        seems standard. More testing needed.
+                        Set the face recognition cosine similarity threshold
+                        (higher = stricter). Default: 0.45
   --distort-audio, -da  Enable audio distortion for the output video (applies 
                         pitch shift and gain effects to the audio). This 
                         automatically applies --keep-audio but will not work 
-                        with --copy-acodec due to MoviePy.
+                        with --copy-acodec.
   --keep-audio, -k      Keep audio from video source file and copy it over to 
                         the output (only applies to videos).
   --copy-acodec, -ca    Keep audio codec from video source file.
   --ffmpeg-config FFMPEG_CONFIG
-                        FFMPEG config arguments for encoding output videos. 
-                        This argument is expected in JSON notation. For a list 
-                        of possible options, refer to the ffmpeg-imageio docs. 
-                        Default: '{"codec": "libx264"}'. Windows example 
+                        FFMPEG config arguments for encoding output videos.
+                        This argument is expected in JSON notation. For a list
+                        of possible options, refer to the ffmpeg docs.
+                        Default: '{"codec": "mpeg4"}'. Windows example
                         --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}".
   --backend {auto,onnxrt,opencv}
                         Backend for ONNX model execution. Default: "auto" 
@@ -186,7 +183,7 @@ Usage example:
 <img src="examples/city_anonymized_mosaic.jpg" width="70%" alt="$ anonfaces examples/city.jpg --replacewith mosaic --mosaicsize 20 -o examples/city_anonymized_mosaic.jpg"/>
 
 ### Face Recognition
-By default face recognition is off. This is supported with --face-recog (-fr) and doing so will open a directory browser to load the reference images path. These are the faces that will not be blurred. I have tested with two faces so far and seems to work well. The speed is something to be desired though. The option `--fr-thresh` will set the face recognition threshold. Default is 0.60 here and seems standard. The higher the number the more lenient. A lower value will cause unwanted blurring on faces set in the reference path.
+By default face recognition is off. Enable it with `--face-recog` (`-fr`) to skip blurring faces stored in the Face Database GUI. Recognition uses ArcFace (w600k_r50 ONNX) with cosine similarity matching — the model auto-downloads on first use. The option `--fr-thresh` sets the cosine similarity threshold (default: 0.45). Higher values are stricter (require closer match); lower values are more lenient and may cause false matches.
 
 Usage example:
 
@@ -280,9 +277,7 @@ The face bounding boxes predicted by the CenterFace detector are then used as ma
 
 ## Credits
 
-- `dlib` is based on https://github.com/davisking/dlib, [released under Boost Software license](https://github.com/davisking/dlib/blob/master/LICENSE.txt)
-- The include dlib models `dlib_face_recognition_resnet_model_v1.dat` and `shape_predictor_5_face_landmarks.dat` are unmodified copies of https://github.com/davisking/dlib-models, 
-  [released under Creative Commons Zero v1.0 Universal],(https://github.com/davisking/dlib-models/blob/master/LICENSE)
+- Face recognition uses the **ArcFace w600k_r50** ONNX model from [InsightFace](https://github.com/deepinsight/insightface), auto-downloaded from HuggingFace on first use
 - `centerface.py` is based on https://github.com/Star-Clouds/centerface (revision [8c39a49](https://github.com/Star-Clouds/CenterFace/tree/8c39a497afb78fb2c064eb84bf010c273bb7d3ce)),
   [released under MIT license](https://github.com/Star-Clouds/CenterFace/blob/36afed/LICENSE)
 - The included model file `centerface.onnx` is an unmodified copy of the [`centerface_bnmerged.onnx`](https://github.com/Star-Clouds/CenterFace/blob/b82ec0c4844e89fd5a0305986aed9bdf33c72585/models/onnx/centerface_bnmerged.onnx) from https://github.com/Star-Clouds/centerface

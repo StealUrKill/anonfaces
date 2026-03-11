@@ -26,8 +26,8 @@ class AnonymizationApp:
             root.tk.call('tk', 'scaling', scaling_factor)
             default_font = ("TkDefaultFont", 8)
             root.option_add("*Font", default_font)
-        window_width = 800
-        window_height = 700
+        window_width = 925
+        window_height = 800
         self.root.title(f"Anonfaces Anonymization Tool - v{__version__}")  
         self.log_text = None  # log widget is not ready initially
         self.log_queue = []  # queue to store log messages before the form is ready
@@ -70,14 +70,14 @@ class AnonymizationApp:
         
         self.convertaudio_button = tk.Button(self.control_frame, text="Convert Audio", command=self.convert_audio_launch)
         self.convertaudio_button.pack(side=tk.LEFT, padx=5)
-        self.tooltips.append(ToolTip(self.convertaudio_button, "Convert to libx264 video codec and aac audio codec."))
+        self.tooltips.append(ToolTip(self.convertaudio_button, "Convert video using the selected video and audio codecs."))
         
         self.progress = ttk.Progressbar(root, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", pady=5)
 
         #self.log_text = tk.Text(root, width=98, height=15, state="disabled")
         #made the log text somewhat smaller to keep the width down. left stock above
-        self.log_text = tk.Text(root, width=113, height=9.5, state="disabled", font=("TkDefaultFont", 9))
+        self.log_text = tk.Text(root, width=130, height=14, state="disabled", font=("TkDefaultFont", 9))
         self.log_text.pack(pady=0)
         
         # right-click menu (popup menu)
@@ -190,28 +190,36 @@ class AnonymizationApp:
             Face Recognition: Enable face recognition to not blur faces in Face GUI Database..
             Face Recognition Name: Enable face recognition names from image name in Face GUI Database.
             Face Recognition GUI: Launch face database GUI.
-            Face Recognition Threshold: Set face recognition threshold. Default: 0.60.
+            Face Recognition Threshold: Set face recognition cosine similarity threshold (higher = stricter). Default: 0.45.
             
         13. Audio:
-            Distort Audio: Enable audio distortion in output video. This applies --keep-audio but will not work with --copy-acodec due to MoviePy
+            Distort Audio: Enable audio distortion in output video. This applies --keep-audio but will not work with --copy-acodec.
             Keep Audio: Keep audio from the video source.
             Copy Audio Codec: Keep the audio codec from the source.
             
-        14. FFmpeg Config:
-            JSON format for FFmpeg encoding options. Default: '{"codec": "libx264"}'.
-            Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
-            Windows example in GUI {"fps": 10, "bitrate": "1000k"}
-            See https://ffmpeg.org/ffmpeg-codecs.html for encoding options
+        14. Video Codec:
+            Select video encoder. mpeg4 (MPEG-4 Part 2, fast, widely compatible, default),
+            libx264 (H.264, better compression), libsvtav1 (AV1, royalty-free, best compression, slower),
+            libvpx-vp9 (VP9, royalty-free, broadly supported). Default: mpeg4.
+
+        15. Audio Codec:
+            Select audio encoder for --keep-audio. aac (default, widely compatible),
+            libmp3lame (MP3), libopus (royalty-free, excellent quality). Default: aac.
+
+        16. FFmpeg Config:
+            Additional FFmpeg encoding options in JSON notation.
+            Example: {"fps": 10, "bitrate": "1000k"}
+            See https://ffmpeg.org/ffmpeg-codecs.html for more options
             
-        15. Backend:
+        17. Backend:
             Select ONNX model execution backend. Options: 'auto', 'onnxrt', 'opencv'. Default: 'auto'.
-            
-        16. Execution Provider:
+
+        18. Execution Provider:
             Override the ONNX runtime execution provider. Only used if backend is onnxrt.
             If not specified, the presumably fastest available one will be automatically selected.
             See - https://onnxruntime.ai/docs/execution-providers/
-                        
-        17. Additional Options:
+
+        19. Additional Options:
             Show Info: Show file input/output locations and ffmpeg command.
             Keep Metadata: Keep metadata from the original image. Default: False.
         """
@@ -495,27 +503,57 @@ If not specified, the presumably fastest available one will
 be automatically selected. Only used if backend is onnxrt"""
             ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
 
+        # Video Codec dropdown
+        self.vcodec_label = tk.Label(self.options_frame, text="Video Codec:")
+        self.vcodec_label.grid(row=9, column=1, padx=0, pady=5, sticky="w")
+        self.tooltips.append(ToolTip(self.vcodec_label,
+            """Video encoder. mpeg4 (MPEG-4 Part 2) is fast and widely compatible (default).
+libx264 (H.264) offers better compression.
+libsvtav1 (AV1) is royalty-free with best compression but slower.
+libvpx-vp9 (VP9) is royalty-free and broadly supported."""))
+
+        self.vcodec_var = tk.StringVar(value="mpeg4")
+        self.vcodec_menu = tk.OptionMenu(self.options_frame, self.vcodec_var, "mpeg4", "libx264", "libsvtav1", "libvpx-vp9")
+        self.vcodec_menu.grid(row=9, column=1, padx=110, pady=5, sticky="w")
+        self.vcodec_menu.config(width=15)
+        self.tooltips.append(MenuToolTip(self.vcodec_menu,
+            """Video encoder. mpeg4 (MPEG-4 Part 2) is fast and widely compatible (default).
+libx264 (H.264) offers better compression.
+libsvtav1 (AV1) is royalty-free with best compression but slower.
+libvpx-vp9 (VP9) is royalty-free and broadly supported."""))
+
+        # Audio Codec dropdown
+        self.acodec_label = tk.Label(self.options_frame, text="Audio Codec:")
+        self.acodec_label.grid(row=10, column=1, padx=0, pady=5, sticky="w")
+        self.tooltips.append(ToolTip(self.acodec_label,
+            """Audio encoder for --keep-audio. aac is the default.
+libmp3lame encodes MP3. libopus is royalty-free with excellent quality."""))
+
+        self.acodec_var = tk.StringVar(value="aac")
+        self.acodec_menu = tk.OptionMenu(self.options_frame, self.acodec_var, "aac", "libmp3lame", "libopus")
+        self.acodec_menu.grid(row=10, column=1, padx=110, pady=5, sticky="w")
+        self.acodec_menu.config(width=15)
+        self.tooltips.append(MenuToolTip(self.acodec_menu,
+            """Audio encoder for --keep-audio. aac is the default.
+libmp3lame encodes MP3. libopus is royalty-free with excellent quality."""))
+
         self.ffmpeg_config_label = tk.Label(self.options_frame, text="FFmpeg Config (JSON):")
-        self.ffmpeg_config_label.grid(row=9, column=1, padx=0, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.ffmpeg_config_label, 
-            """FFMPEG config arguments for encoding output videos.
-This argument is expected in JSON notation. For a list
-of possible options, refer to the ffmpeg docs.
-Default: '{"codec": "libx264"}'
-Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
-Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
-            
+        self.ffmpeg_config_label.grid(row=11, column=1, padx=0, pady=5, sticky="w")
+        self.tooltips.append(ToolTip(self.ffmpeg_config_label,
+            """Additional FFMPEG config in JSON notation.
+Overrides for fps, bitrate, pix_fmt, etc.
+Example: {"fps": 10, "bitrate": "1000k"}
+The video codec is set by the Video Codec dropdown above."""
+            ))
+
         self.ffmpeg_config_entry = tk.Entry(self.options_frame, width=27)
-        self.ffmpeg_config_entry.grid(row=9, column=1, padx=136, pady=5, sticky="w")
-        self.tooltips.append(ToolTip(self.ffmpeg_config_entry, 
-            """FFMPEG config arguments for encoding output videos.
-This argument is expected in JSON notation. For a list
-of possible options, refer to the ffmpeg docs.
-Default: '{"codec": "libx264"}'
-Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
-Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
-            ))#PS I HATE THE WAY THIS FORMATS IN THE TOOLTIP
+        self.ffmpeg_config_entry.grid(row=11, column=1, padx=136, pady=5, sticky="w")
+        self.tooltips.append(ToolTip(self.ffmpeg_config_entry,
+            """Additional FFMPEG config in JSON notation.
+Overrides for fps, bitrate, pix_fmt, etc.
+Example: {"fps": 10, "bitrate": "1000k"}
+The video codec is set by the Video Codec dropdown above."""
+            ))
         
 
     def get_available_execution_providers(self):
@@ -723,6 +761,8 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
         self.replacewith_var.set("")
         self.backend_var.set("")
         self.ep_var.set("")
+        self.vcodec_var.set("mpeg4")
+        self.acodec_var.set("aac")
         
 
     def convert_audio_launch(self):
@@ -746,10 +786,12 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
         input_name, input_ext = os.path.splitext(input_filename)
         outputFilePath = os.path.join(input_dir, f"{input_name}_converted{input_ext}")
         self.progress.start()
-        # Construct the FFmpeg command
+        # Construct the FFmpeg command using selected codecs
+        vcodec = self.vcodec_var.get() or "mpeg4"
+        acodec = self.acodec_var.get() or "aac"
         ffmpegCommand = [
             ffmpeg_path, "-y", "-i", inputFilePath,
-            "-c:v", "libx264", "-crf", "23", "-c:a", "aac", "-q:a", "100", "-sn", "-vf", "yadif", outputFilePath
+            "-c:v", vcodec, "-crf", "23", "-c:a", acodec, "-q:a", "100", "-sn", "-vf", "yadif", outputFilePath
         ]
     
         self.log_message(f"Running FFmpeg command: {' '.join(ffmpegCommand)}")
@@ -806,6 +848,8 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
             "fr_thresh": self.fr_thresh_entry.get(),
             "backend": self.backend_var.get(),
             "execution_provider": self.ep_var.get(),
+            "vcodec": self.vcodec_var.get(),
+            "acodec": self.acodec_var.get(),
             "ffmpeg_config": self.ffmpeg_config_entry.get(),
             "info": self.info_var.get(),
             "keep_metadata": self.keep_metadata_var.get(),
@@ -855,8 +899,20 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
             args.extend(["--backend", options["backend"]])
         if options["execution_provider"]:
             args.extend(["--execution-provider", options["execution_provider"]])
+        # Build ffmpeg-config JSON merging codec dropdowns + manual entry
+        import json as _json
+        ffmpeg_cfg = {}
         if options["ffmpeg_config"]:
-            args.extend(["--ffmpeg-config", options["ffmpeg_config"]])
+            try:
+                ffmpeg_cfg = _json.loads(options["ffmpeg_config"])
+            except _json.JSONDecodeError:
+                pass
+        if options.get("vcodec"):
+            ffmpeg_cfg["codec"] = options["vcodec"]
+        if options.get("acodec"):
+            ffmpeg_cfg["acodec"] = options["acodec"]
+        if ffmpeg_cfg:
+            args.extend(["--ffmpeg-config", _json.dumps(ffmpeg_cfg)])
         if options["info"]:
             args.append("--info")
         if options["keep_metadata"]:

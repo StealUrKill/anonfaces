@@ -4,8 +4,7 @@ import json
 import mimetypes
 import os
 from typing import Dict, Tuple
-import shutil
-import skimage.draw
+import tempfile
 import numpy as np
 import ffmpeg
 import cv2
@@ -13,8 +12,7 @@ import sys
 import math
 import signal
 import platform
-from moviepy import *
-from pedalboard import *
+from pedalboard import Gain, PitchShift, Pedalboard
 from pedalboard.io import AudioFile
 from tqdm import tqdm
 import tkinter as tk
@@ -57,27 +55,6 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 
-def get_video_bitrate(video_path):
-    try:
-        probe = ffmpeg.probe(video_path)
-        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
-        if video_stream and 'bit_rate' in video_stream:
-            return int(video_stream['bit_rate'])
-    except ffmpeg.Error as e:
-        tqdm.write(f"Error retrieving bitrate: {e.stderr.decode()}")
-    return None
-
-
-def get_video_pix_fmt(video_path):
-    try:
-        probe = ffmpeg.probe(video_path)
-        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
-        if video_stream and 'pix_fmt' in video_stream:
-            return video_stream['pix_fmt']
-    except ffmpeg.Error as e:
-        tqdm.write(f"Error retrieving pixel format: {e.stderr.decode()}")
-    return None
-
 
 def scale_bb(x1, y1, x2, y2, mask_scale=1.0):
     s = mask_scale - 1.0
@@ -107,10 +84,13 @@ def draw_det(
             (abs(x2 - x1) // bf, abs(y2 - y1) // bf)
         )
         if ellipse:
+            # Build ellipse mask using cv2 (C++ native, faster than skimage coordinate generation)
+            h_roi, w_roi = y2 - y1, x2 - x1
+            mask = np.zeros((h_roi, w_roi), dtype=np.uint8)
+            cv2.ellipse(mask, (w_roi // 2, h_roi // 2), (w_roi // 2, h_roi // 2), 0, 0, 360, 255, -1)
+            mask_bool = mask > 0
             roibox = frame[y1:y2, x1:x2]
-            # Get y and x coordinate lists of the "bounding ellipse"
-            ey, ex = skimage.draw.ellipse((y2 - y1) // 2, (x2 - x1) // 2, (y2 - y1) // 2, (x2 - x1) // 2)
-            roibox[ey, ex] = blurred_box[ey, ex]
+            roibox[mask_bool] = blurred_box[mask_bool]
             frame[y1:y2, x1:x2] = roibox
         else:
             frame[y1:y2, x1:x2] = blurred_box
@@ -220,6 +200,25 @@ def anonymize_frame(
         face_recog, fr_name, arcface=None, landmarks=None,
         reference_face_descriptors=None, reference_names=None, reference_image_ids=None, fr_thresh=0.45,
 ):
+    # Batch ArcFace: align all faces and compute embeddings in one inference call
+    use_recog = face_recog and reference_face_descriptors and arcface is not None and landmarks is not None
+    known_flags = {}  # index -> matched_name or None
+    if use_recog and len(dets) > 0:
+        aligned_faces = []
+        for i in range(len(dets)):
+            face_lms = landmarks[i].reshape(5, 2)
+            aligned_faces.append(align_face(frame, face_lms))
+        embeddings = arcface.get_embeddings_batch(aligned_faces)
+        # Vectorized matching: ref_matrix (R, 512) @ embedding (512,) -> (R,) similarities
+        ref_matrix = np.stack(reference_face_descriptors)  # (R, 512)
+        for i in range(len(dets)):
+            similarities = ref_matrix @ embeddings[i]
+            best_idx = np.argmax(similarities)
+            if similarities[best_idx] > fr_thresh:
+                known_flags[i] = reference_names[best_idx]
+            else:
+                known_flags[i] = None
+
     for i, det in enumerate(dets):
         boxes, score = det[:4], det[4]
         x1, y1, x2, y2 = boxes.astype(int)
@@ -227,21 +226,14 @@ def anonymize_frame(
         y1, y2 = max(0, y1), min(frame.shape[0] - 1, y2)
         x1, x2 = max(0, x1), min(frame.shape[1] - 1, x2)
 
-        if face_recog and reference_face_descriptors and arcface is not None and landmarks is not None:
-            # Use CenterFace landmarks + ArcFace for recognition (no redundant detection)
-            face_lms = landmarks[i].reshape(5, 2)
-            aligned = align_face(frame, face_lms)
-            face_embedding = arcface.get_embedding(aligned)
-
-            # Check if the detected face is a known reference face
-            matched_name = is_known_face(face_embedding, reference_face_descriptors, reference_names, reference_image_ids, threshold=fr_thresh)
+        if use_recog:
+            matched_name = known_flags.get(i)
             if matched_name:
                 if fr_name:
                     text_size = cv2.getTextSize(matched_name, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
                     text_x = x1 + (x2 - x1 - text_size[0]) // 2
                     text_y = y1 + text_size[1]
                     cv2.putText(frame, matched_name, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36, 255, 12), 2)
-
                 continue  # Skip blurring for known faces
 
         draw_det(
@@ -342,11 +334,11 @@ def video_detect(
         _ffmpeg_config = ffmpeg_config.copy()
         #  If fps is not explicitly set in ffmpeg_config, use source video fps value
         _ffmpeg_config.setdefault('fps', original_fps)
-        codec = _ffmpeg_config.get('codec', 'libx264')
+        codec = _ffmpeg_config.get('codec', 'mpeg4')
         fps = _ffmpeg_config.get('fps', original_fps)
         bitrate = _ffmpeg_config.get('bitrate', None)
         pix_fmt = _ffmpeg_config.get('pix_fmt', None)
-        audio_codec = None
+        audio_codec = _ffmpeg_config.get('acodec', 'aac')
         audio_bitrate = _ffmpeg_config.get('audio_bitrate', None)
         sample_rate = _ffmpeg_config.get('sample_rate', None)
 
@@ -361,7 +353,6 @@ def video_detect(
         # Handle audio muxing
         if keep_audio and has_audio:
             audio_in = ffmpeg.input(ipath).audio
-            audio_codec = 'aac'
             output_kwargs['acodec'] = audio_codec
             output_kwargs['shortest'] = None  # Trim audio to match video length (e.g. if stopped early)
             if audio_bitrate:
@@ -492,55 +483,30 @@ def video_detect(
     bar.close()
 
 
-EXTRACTED_AUDIO = "extracted_audio.wav"
-DISTORTED_AUDIO = "distorted_audio.wav"
-
-
-def extract_audio_from_video(v_path: str, a_path: str):
-    video = VideoFileClip(v_path)
-    video.audio.write_audiofile(a_path)
-
-def distort_audio(audio_input: str, audio_output: str, sample_rate: float = 44100.0):
-    with AudioFile(audio_input).resampled_to(sample_rate) as f:
-        audio = f.read(f.frames)
-
-    board = Pedalboard([
-        Gain(gain_db=5),
-        PitchShift(semitones=-2.5),
-    ])
-    d_audio = board(audio, sample_rate)
-
-    with AudioFile(audio_output, 'w', sample_rate, d_audio.shape[0]) as f:
-        f.write(d_audio)
-
-def combine_video_audio(v_path: str, a_path: str, o_path: str):
-    vclip = VideoFileClip(v_path)
-    aclip = AudioFileClip(a_path)
-
-    vclip.audio = aclip
-    vclip.write_videofile(o_path, codec="libx264", logger=None)
-    
-def distort_now(ipath, opath):
-
-    # Add "_distorted" to the output file name
+def distort_now(ipath, opath, sample_rate=44100.0):
+    """Extract audio from original, distort it, mux onto anonymized video."""
     root, ext = os.path.splitext(opath)
     dopath = f"{root}_distorted{ext}"
 
-    # Copy opath to dopath
-    shutil.copy(opath, dopath)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        extracted = os.path.join(tmpdir, "audio.wav")
+        distorted = os.path.join(tmpdir, "distorted.wav")
 
-    # Extract audio from the original video
-    extract_audio_from_video(ipath, EXTRACTED_AUDIO)
+        # Extract audio from original video via ffmpeg
+        ffmpeg.input(ipath).output(extracted, ac=1, ar=sample_rate).overwrite_output().run(quiet=True)
 
-    # Distort the extracted audio
-    distort_audio(EXTRACTED_AUDIO, DISTORTED_AUDIO)
+        # Distort with pedalboard
+        with AudioFile(extracted).resampled_to(sample_rate) as f:
+            audio = f.read(f.frames)
+        board = Pedalboard([Gain(gain_db=5), PitchShift(semitones=-2.5)])
+        d_audio = board(audio, sample_rate)
+        with AudioFile(distorted, 'w', sample_rate, d_audio.shape[0]) as f:
+            f.write(d_audio)
 
-    # Combine the processed audio with the original video
-    combine_video_audio(opath, DISTORTED_AUDIO, dopath)
-    
-    # Remove temporary audio files
-    os.remove(EXTRACTED_AUDIO)
-    os.remove(DISTORTED_AUDIO)
+        # Mux: copy video stream from anonymized output + distorted audio (no re-encode)
+        video_in = ffmpeg.input(opath).video
+        audio_in = ffmpeg.input(distorted).audio
+        ffmpeg.output(video_in, audio_in, dopath, vcodec='copy', acodec='aac').overwrite_output().run(quiet=True)
     
 
 def image_detect(
@@ -702,7 +668,7 @@ def parse_cli_args():
         help="Set the face recognition cosine similarity threshold (higher = stricter). Default: 0.45")
     parser.add_argument(
         '--distort-audio', '-da', default=False, action='store_true',
-        help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio). This automatically applies --keep-audio but will not work with --copy-acodec due to MoviePy')
+        help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio). This automatically applies --keep-audio but will not work with --copy-acodec.')
     parser.add_argument(
         '--keep-audio', '-k', default=False, action='store_true',
         help='Keep audio from video source file and copy it over to the output (only applies to videos).')
@@ -710,8 +676,8 @@ def parse_cli_args():
         '--copy-acodec', '-ca', default=False, action='store_true',
         help='Keep audio codec from video source file.')
     parser.add_argument(
-        '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
-        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg docs. Default: \'{"codec": "libx264"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10, \\"bitrate\\": \\"1000k\\"}"')
+        '--ffmpeg-config', default={"codec": "mpeg4"}, type=json.loads,
+        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg docs. Default: \'{"codec": "mpeg4"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10, \\"bitrate\\": \\"1000k\\"}"')
     parser.add_argument(
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
