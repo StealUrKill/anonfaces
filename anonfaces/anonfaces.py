@@ -3,11 +3,17 @@ import argparse
 import sys
 import tkinter as tk
 
-from anonfaces.gui.dbfacegui import FaceDatabaseApp
-from anonfaces.gui.gui import AnonymizationApp
-from anonfaces.main.main import main as main_script
-from anonfaces.helper.cleanup import remove_database
-#from main.main import main  #to run as standalone uncomment then comment the one above. see main.py as well
+try:
+    from anonfaces.gui.dbfacegui import FaceDatabaseApp
+    from anonfaces.gui.gui import AnonymizationApp
+    from anonfaces.main.main import main as main_script
+    from anonfaces.helper.cleanup import remove_database
+except (ModuleNotFoundError, ImportError):
+    # Standalone mode - running directly from the package directory
+    from gui.dbfacegui import FaceDatabaseApp
+    from gui.gui import AnonymizationApp
+    from main.main import main as main_script
+    from helper.cleanup import remove_database
 
 def run_anonfaces_gui():
     root = tk.Tk()

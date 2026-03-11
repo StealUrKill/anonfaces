@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import imageio_ffmpeg as ffmpeg
+import shutil
 import threading
 import subprocess
 import signal
@@ -8,8 +8,15 @@ import sys
 import os
 import platform
 from datetime import datetime
-import anonfaces
-from anonfaces import __version__
+try:
+    import anonfaces
+    from anonfaces import __version__
+except (ModuleNotFoundError, ImportError):
+    _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _pkg_dir not in sys.path:
+        sys.path.insert(0, _pkg_dir)
+    import __init__ as anonfaces
+    from __init__ import __version__
 
 class AnonymizationApp:
     def __init__(self, root):
@@ -194,7 +201,7 @@ class AnonymizationApp:
             JSON format for FFmpeg encoding options. Default: '{"codec": "libx264"}'.
             Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
             Windows example in GUI {"fps": 10, "bitrate": "1000k"}
-            See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
+            See https://ffmpeg.org/ffmpeg-codecs.html for encoding options
             
         15. Backend:
             Select ONNX model execution backend. Options: 'auto', 'onnxrt', 'opencv'. Default: 'auto'.
@@ -493,7 +500,7 @@ be automatically selected. Only used if backend is onnxrt"""
         self.tooltips.append(ToolTip(self.ffmpeg_config_label, 
             """FFMPEG config arguments for encoding output videos.
 This argument is expected in JSON notation. For a list
-of possible options, refer to the ffmpeg-imageio docs.
+of possible options, refer to the ffmpeg docs.
 Default: '{"codec": "libx264"}'
 Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
 Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
@@ -504,7 +511,7 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
         self.tooltips.append(ToolTip(self.ffmpeg_config_entry, 
             """FFMPEG config arguments for encoding output videos.
 This argument is expected in JSON notation. For a list
-of possible options, refer to the ffmpeg-imageio docs.
+of possible options, refer to the ffmpeg docs.
 Default: '{"codec": "libx264"}'
 Windows example in CLI --ffmpeg-config "{\"fps\": 10, \"bitrate\": \"1000k\"}"
 Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
@@ -721,11 +728,10 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
     def convert_audio_launch(self):
         self.clear_log()
         # Find the FFmpeg executable
-        ffmpeg_binaries_path = self.find_imageio_ffmpeg_binaries_path()
-        ffmpeg_path = self.find_ffmpeg_executable(ffmpeg_binaries_path) if ffmpeg_binaries_path else None
-    
+        ffmpeg_path = self.find_ffmpeg_path()
+
         if not ffmpeg_path:
-            self.log_message("FFmpeg executable not found. Ensure imageio-ffmpeg is installed.")
+            self.log_message("FFmpeg executable not found. Ensure ffmpeg is installed and on your system PATH.")
             return
     
         # Get input file path from GUI
@@ -776,20 +782,9 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
 
     
     
-    def find_imageio_ffmpeg_binaries_path(self):
-        try:
-            ffmpeg_module_path = os.path.dirname(ffmpeg.__file__)  # Get the path to the imageio_ffmpeg module
-            binaries_path = os.path.join(ffmpeg_module_path, "binaries")  # Construct the path to the binaries folder
-            return binaries_path
-        except ImportError:
-            return None  # imageio-ffmpeg package not found
-    
-    def find_ffmpeg_executable(self, binaries_path):
-        if binaries_path and os.path.isdir(binaries_path):  # Ensure path exists
-            for filename in os.listdir(binaries_path):
-                if filename.lower().startswith("ffmpeg") and filename.lower().endswith(".exe"):
-                    return os.path.join(binaries_path, filename)
-        return None  # FFmpeg executable not found
+    def find_ffmpeg_path(self):
+        # Find ffmpeg on system PATH
+        return shutil.which('ffmpeg')
     
 
 
@@ -873,11 +868,13 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
         if options["draw_scores"]:
             args.append("--draw-scores")
         
-        cmd = ["anonfaces"] + args
-        
+        # Run via the current Python interpreter to ensure we use local source
+        pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cmd = [sys.executable, "-m", "anonfaces"] + args
+
         def monitor_process():
             try:
-                self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=os.path.dirname(pkg_dir))
     
                 def read_stdout():
                     for line in iter(self.process.stdout.readline, ''):

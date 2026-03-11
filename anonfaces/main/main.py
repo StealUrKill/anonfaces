@@ -7,9 +7,7 @@ from typing import Dict, Tuple
 import shutil
 import skimage.draw
 import numpy as np
-import imageio
-import imageio_ffmpeg as ffmpeg
-import imageio.plugins.ffmpeg
+import ffmpeg
 import cv2
 import sys
 import math
@@ -27,12 +25,18 @@ from tkinter import Tk
 from tkinter.filedialog import askdirectory
 
 
-from anonfaces import __version__
-from anonfaces.main.centerface import CenterFace
-from anonfaces.gui.dbfacegui import FaceDatabaseApp
-#from main import __version__               #to run as standalone uncomment these three
-#from main.centerface import CenterFace     #then comment the three above
-#from gui.dbfacegui import FaceDatabaseApp
+try:
+    from anonfaces import __version__
+    from anonfaces.main.centerface import CenterFace
+    from anonfaces.gui.dbfacegui import FaceDatabaseApp
+except (ModuleNotFoundError, ImportError):
+    # Standalone mode - running directly from the package directory
+    _pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _pkg_dir not in sys.path:
+        sys.path.insert(0, _pkg_dir)
+    from __init__ import __version__
+    from main.centerface import CenterFace
+    from gui.dbfacegui import FaceDatabaseApp
 
 
 
@@ -50,6 +54,28 @@ def signal_handler(signum, frame):
 
 
 signal.signal(signal.SIGINT, signal_handler)
+
+
+def get_video_bitrate(video_path):
+    try:
+        probe = ffmpeg.probe(video_path)
+        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+        if video_stream and 'bit_rate' in video_stream:
+            return int(video_stream['bit_rate'])
+    except ffmpeg.Error as e:
+        tqdm.write(f"Error retrieving bitrate: {e.stderr.decode()}")
+    return None
+
+
+def get_video_pix_fmt(video_path):
+    try:
+        probe = ffmpeg.probe(video_path)
+        video_stream = next((stream for stream in probe['streams'] if stream['codec_type'] == 'video'), None)
+        if video_stream and 'pix_fmt' in video_stream:
+            return video_stream['pix_fmt']
+    except ffmpeg.Error as e:
+        tqdm.write(f"Error retrieving pixel format: {e.stderr.decode()}")
+    return None
 
 
 def scale_bb(x1, y1, x2, y2, mask_scale=1.0):
@@ -224,10 +250,10 @@ def anonymize_frame(
             face = frame[y1:y2, x1:x2]
             face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
             #face_rgb = cv2.resize(face_rgb, (128, 128))  # option to resize for faster times and still match - testing on an off locally
-            dets = detector(face_rgb, 1)#reduce the number of scales to speed up detection? 1 default here
-            
-            if len(dets) > 0:
-                shape = sp(face_rgb, dets[0])
+            dlib_dets = detector(face_rgb, 1)#reduce the number of scales to speed up detection? 1 default here
+
+            if len(dlib_dets) > 0:
+                shape = sp(face_rgb, dlib_dets[0])
                 face_descriptor = facerec.compute_face_descriptor(face_rgb, shape)
                 face_descriptor = np.array(face_descriptor)
 
@@ -258,11 +284,6 @@ def anonymize_frame(
 
 
 
-def cam_read_iter(reader):
-    while True:
-        yield reader.get_next_data()
-
-
 def video_detect(
         ipath: str,
         opath: str,
@@ -291,34 +312,51 @@ def video_detect(
         detector=None, sp=None, facerec=None
 ):
     try:
-        if 'fps' in ffmpeg_config:
-            reader: imageio.plugins.ffmpeg.FfmpegFormat.Reader = imageio.get_reader(ipath, fps=ffmpeg_config['fps'])
+        # Handle camera device identifiers for OpenCV
+        if isinstance(ipath, str) and ipath.startswith('<video') and ipath.endswith('>'):
+            device_id = int(ipath[6:-1])
+            # Use DirectShow on Windows for better camera compatibility
+            if platform.system() == 'Windows':
+                cap = cv2.VideoCapture(device_id, cv2.CAP_DSHOW)
+            else:
+                cap = cv2.VideoCapture(device_id)
         else:
-            reader: imageio.plugins.ffmpeg.FfmpegFormat.Reader = imageio.get_reader(ipath)
+            cap = cv2.VideoCapture(ipath)
 
-        meta = reader.get_meta_data()
-        _ = meta['size']
-    except:
+        if not cap.isOpened():
+            raise IOError("Cannot open video source")
+
+        original_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        # Check for audio stream via ffmpeg probe (only for files, not cameras)
+        has_audio = False
+        if not cam:
+            try:
+                probe_data = ffmpeg.probe(ipath)
+                audio_stream = next((s for s in probe_data['streams'] if s['codec_type'] == 'audio'), None)
+                has_audio = audio_stream is not None
+            except:
+                has_audio = False
+    except Exception as e:
         if cam:
-            tqdm.write(f'Could not find video device {ipath}. Please set a valid input.')
+            tqdm.write(f'Could not find video device {ipath}. Please set a valid input. Error: {e}')
         else:
-            tqdm.write(f'Could not open file {ipath} as a video file with imageio. Skipping file...')
+            tqdm.write(f'Could not open file {ipath} as a video file. Skipping file...')
         return
 
     if cam:
         nframes = None
-        read_iter = cam_read_iter(reader)
     else:
-        read_iter = reader.iter_data()
         try:
             if platform.system() != "Darwin":
-                total_frames = reader.count_frames()
-                original_fps = meta.get('fps', 30)  # Default to 30 FPS if not provided
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 specified_fps = ffmpeg_config.get('fps', original_fps)
-    
+
                 # Calculate adjusted total frames based on specified FPS
-                nframes = math.ceil(total_frames * (specified_fps / original_fps))        
-            else:    
+                nframes = math.ceil(total_frames * (specified_fps / original_fps)) if total_frames > 0 else None
+            else:
                 nframes = None  # Frame counting fails on macOS - do not have a mac to test - someone? anyone?
         except:
             nframes = None # Fallback if counting frames fail
@@ -328,67 +366,120 @@ def video_detect(
     else:
         bar = tqdm(dynamic_ncols=True, total=nframes)
 
+    process = None
     if opath is not None:
         _ffmpeg_config = ffmpeg_config.copy()
         #  If fps is not explicitly set in ffmpeg_config, use source video fps value
-        _ffmpeg_config.setdefault('fps', meta['fps'])
-        _ffmpeg_config.setdefault('ffmpeg_log_level', 'panic')
-        if keep_audio and meta.get('audio_codec'):  # Carry over audio from input path but change audio to libmp3lame
-            _ffmpeg_config.setdefault('audio_path', ipath)
-            _ffmpeg_config.setdefault('audio_codec', 'libmp3lame')
-        # Carry over audio from input path, use "copy" codec (no transcoding)
-        if copy_acodec and meta.get('audio_codec'): #use "copy" codec off by default but copies direct audio codec
-            _ffmpeg_config.setdefault('audio_path', ipath)
-            _ffmpeg_config.setdefault('audio_codec', 'copy')
+        _ffmpeg_config.setdefault('fps', original_fps)
         codec = _ffmpeg_config.get('codec', 'libx264')
-        fps = _ffmpeg_config.get('fps', None)
+        fps = _ffmpeg_config.get('fps', original_fps)
         bitrate = _ffmpeg_config.get('bitrate', None)
-        audio_codec = _ffmpeg_config.get('audio_codec', None)
-        audio_bitrate = _ffmpeg_config.get('audio_bitrate', None)
         pix_fmt = _ffmpeg_config.get('pix_fmt', None)
+        audio_codec = None
+        audio_bitrate = _ffmpeg_config.get('audio_bitrate', None)
         sample_rate = _ffmpeg_config.get('sample_rate', None)
-        writer: imageio.plugins.ffmpeg.FfmpegFormat.Writer = imageio.get_writer(
-            opath, format='FFMPEG', mode='I', **_ffmpeg_config
-        )
-        #work in progess due to possible missing params
+
+        # Build ffmpeg-python output pipeline
+        video_in = ffmpeg.input('pipe:', format='rawvideo', pix_fmt='rgb24', s=f'{width}x{height}', r=fps)
+        output_kwargs = {'vcodec': codec}
+        if bitrate:
+            output_kwargs['video_bitrate'] = bitrate
+        # Default to yuv420p for broad player compatibility (rgb24 input causes 4:4:4 profile)
+        output_kwargs['pix_fmt'] = pix_fmt if pix_fmt else 'yuv420p'
+
+        # Handle audio muxing
+        if keep_audio and has_audio:
+            audio_in = ffmpeg.input(ipath).audio
+            audio_codec = 'aac'
+            output_kwargs['acodec'] = audio_codec
+            output_kwargs['shortest'] = None  # Trim audio to match video length (e.g. if stopped early)
+            if audio_bitrate:
+                output_kwargs['audio_bitrate'] = audio_bitrate
+            if sample_rate:
+                output_kwargs['ar'] = sample_rate
+            process = (
+                ffmpeg
+                .output(video_in, audio_in, opath, **output_kwargs)
+                .overwrite_output()
+                .run_async(pipe_stdin=True, pipe_stderr=True)
+            )
+        elif copy_acodec and has_audio:
+            audio_in = ffmpeg.input(ipath).audio
+            audio_codec = 'copy'
+            output_kwargs['acodec'] = audio_codec
+            output_kwargs['shortest'] = None  # Trim audio to match video length (e.g. if stopped early)
+            process = (
+                ffmpeg
+                .output(video_in, audio_in, opath, **output_kwargs)
+                .overwrite_output()
+                .run_async(pipe_stdin=True, pipe_stderr=True)
+            )
+        else:
+            process = (
+                ffmpeg
+                .output(video_in, opath, **output_kwargs)
+                .overwrite_output()
+                .run_async(pipe_stdin=True, pipe_stderr=True)
+            )
+
         if info:
-            ffmpeg_command = f"ffmpeg -y -loglevel {_ffmpeg_config['ffmpeg_log_level']} -i {ipath} "
-    
-            if fps:
-                ffmpeg_command += f"-r {fps} "
+            ffmpeg_command = f"ffmpeg -y -f rawvideo -pix_fmt rgb24 -s {width}x{height} -r {fps} -i pipe: "
             if bitrate:
                 ffmpeg_command += f"-b:v {bitrate} "
             if pix_fmt:
                 ffmpeg_command += f"-pix_fmt {pix_fmt} "
-    
-            # Add video codec
             ffmpeg_command += f"-c:v {codec} "
-    
-            # If audio is specified
             if audio_codec:
                 ffmpeg_command += f"-c:a {audio_codec} "
                 if audio_bitrate:
                     ffmpeg_command += f"-b:a {audio_bitrate} "
                 if sample_rate:
                     ffmpeg_command += f"-ar {sample_rate} "
-    
             ffmpeg_command += f"{opath}"
-            
             tqdm.write(f"FFMPEG Command: {ffmpeg_command}")
             tqdm.write("")
 
-    for frame in read_iter:
+    # Drain ffmpeg stderr in a background thread to prevent pipe deadlock
+    ffmpeg_stderr_output = []
+    if process is not None and process.stderr:
+        import threading as _threading
+        def _drain_stderr():
+            for line in iter(process.stderr.readline, b''):
+                ffmpeg_stderr_output.append(line.decode(errors='replace').strip())
+        _stderr_thread = _threading.Thread(target=_drain_stderr, daemon=True)
+        _stderr_thread.start()
+
+    # Handle fps resampling - skip frames if target fps differs from source
+    target_fps = ffmpeg_config.get('fps', original_fps)
+    frame_interval = original_fps / target_fps if target_fps < original_fps else 1
+    frame_idx = 0
+
+    while True:
         #signal flag during ffmpeg video_detect
         if stop_ffmpeg:
             bar.close()
-            reader.close()
-            if opath is not None:
-                writer.close()
+            cap.release()
+            if opath is not None and process is not None:
+                process.stdin.close()
+                process.wait()
             tqdm.write(f"")
             tqdm.write("Stop signal received, stopping cleanly...")
             tqdm.write(f"")
             return
-        
+
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Frame skipping for fps resampling
+        if frame_interval > 1:
+            frame_idx += 1
+            if int(frame_idx % frame_interval) != 0:
+                continue
+
+        # Convert BGR to RGB (OpenCV reads BGR, CenterFace expects RGB)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
         # Perform network inference, get bb dets but discard landmark predictions
         dets, _ = centerface(frame, threshold=threshold)
 
@@ -404,18 +495,30 @@ def video_detect(
             detector=detector, sp=sp, facerec=facerec
         )
 
-        if opath is not None:
-            writer.append_data(frame)
+        if opath is not None and process is not None:
+            try:
+                process.stdin.write(frame.tobytes())
+            except OSError as e:
+                tqdm.write(f"FFmpeg pipe error: {e}")
+                if ffmpeg_stderr_output:
+                    tqdm.write(f"FFmpeg stderr: {chr(10).join(ffmpeg_stderr_output[-20:])}")
+                break
 
         if enable_preview:
-            cv2.imshow('Preview of anonymization results (quit by pressing Q or Escape)', frame[:, :, ::-1])  # RGB -> RGB
+            cv2.imshow('Preview of anonymization results (quit by pressing Q or Escape)', frame[:, :, ::-1])  # RGB -> BGR for display
             if cv2.waitKey(1) & 0xFF in [ord('q'), 27]:  # 27 is the escape key code
                 cv2.destroyAllWindows()
                 break
         bar.update()
-    reader.close()
-    if opath is not None:
-        writer.close()
+    cap.release()
+    if opath is not None and process is not None:
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+        process.wait()
+        if process.returncode != 0 and ffmpeg_stderr_output:
+            tqdm.write(f"FFmpeg error output: {chr(10).join(ffmpeg_stderr_output[-20:])}")
     bar.close()
 
 
@@ -492,12 +595,18 @@ def image_detect(
         fr_name: bool = False,
         detector=None, sp=None, facerec=None
 ):
-    frame = imageio.v3.imread(ipath)
-    
+    frame_bgr = cv2.imread(ipath)
+    if frame_bgr is None:
+        tqdm.write(f'Could not open image {ipath}. Skipping...')
+        return
+    # Convert BGR to RGB (OpenCV reads BGR, CenterFace expects RGB)
+    frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
     if keep_metadata:
-        # Source image EXIF metadata retrieval via imageio V3 lib
-        metadata = imageio.v3.immeta(ipath)
-        exif_dict = metadata.get("exif", None)
+        # Source image EXIF metadata retrieval via PIL
+        from PIL import Image as PILImage
+        pil_img = PILImage.open(ipath)
+        exif_data = pil_img.info.get('exif', None)
 
     # Perform network inference, get bb dets but discard landmark predictions
     dets, _ = centerface(frame, threshold=threshold)
@@ -515,20 +624,18 @@ def image_detect(
     )
 
     if enable_preview:
-        cv2.imshow('Preview of anonymization results (quit by pressing Q or Escape)', frame[:, :, ::-1])  # RGB -> RGB
+        cv2.imshow('Preview of anonymization results (quit by pressing Q or Escape)', frame[:, :, ::-1])  # RGB -> BGR for display
         if cv2.waitKey(0) & 0xFF in [ord('q'), 27]:  # 27 is the escape key code
             cv2.destroyAllWindows()
 
-    imageio.imsave(opath, frame)
-    
-    # save the image/s with or without EXIF metadata based on its availability due to error with exif=None
-    # this is due to PIL (used by imageio for saving JPEG images) trying to access the len() of exif, but exif is None
-    if keep_metadata and exif_dict:
-        imageio.imsave(opath, frame, exif=exif_dict)
+    # Save with or without EXIF metadata
+    if keep_metadata and exif_data:
+        from PIL import Image as PILImage
+        pil_out = PILImage.fromarray(frame)  # frame is RGB, PIL expects RGB
+        pil_out.save(opath, exif=exif_data)
     else:
-        imageio.imsave(opath, frame)
-
-    #tqdm.write(f'Output saved to {opath}')
+        frame_out = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(opath, frame_out)
 
 
 def get_file_type(path):
@@ -552,7 +659,8 @@ def get_anonymized_image(frame,
                          mask_scale: float,
                          ellipse: bool,
                          draw_scores: bool,
-                         replaceimg = None
+                         replaceimg = None,
+                         mosaicsize: int = 20
                          ):
     """
     Method for getting an anonymized image without CLI
@@ -565,7 +673,9 @@ def get_anonymized_image(frame,
     anonymize_frame(
         dets, frame, mask_scale=mask_scale,
         replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
-        replaceimg=replaceimg
+        replaceimg=replaceimg, mosaicsize=mosaicsize,
+        face_recog=False, fr_name=False,
+        detector=None, sp=None, facerec=None
     )
 
     return frame
@@ -760,8 +870,17 @@ def main():
         w, h = in_shape.split('x')
         in_shape = int(w), int(h)
     if replacewith == "img":
-        replaceimg = imageio.imread(args.replaceimg)
-        tqdm.write(f'After opening {args.replaceimg} shape: {replaceimg.shape}')
+        replaceimg = cv2.imread(args.replaceimg, cv2.IMREAD_UNCHANGED)
+        if replaceimg is not None:
+            # Convert BGR/BGRA to RGB/RGBA for consistency
+            if replaceimg.shape[2] == 4:
+                replaceimg = cv2.cvtColor(replaceimg, cv2.COLOR_BGRA2RGBA)
+            else:
+                replaceimg = cv2.cvtColor(replaceimg, cv2.COLOR_BGR2RGB)
+            tqdm.write(f'After opening {args.replaceimg} shape: {replaceimg.shape}')
+        else:
+            tqdm.write(f'Could not open replacement image {args.replaceimg}. Exiting.')
+            sys.exit(1)
 
 
     # TODO: scalar downscaling setting (-> in_shape), preserving aspect ratio
