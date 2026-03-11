@@ -25,8 +25,6 @@ dependencies = [
     "pedalboard>=0.9.22",
     "onnx>=1.20.1",
     "ffmpeg-python>=0.2.0",
-    "imageio>=2.37.3",
-    "imageio-ffmpeg>=0.6.0",
 ]
 
 [project.optional-dependencies]
@@ -40,13 +38,11 @@ anonfaces = "anonfaces.anonfaces:main"
 faceclean = "anonfaces.helper.cleanup:remove_database"
 
 [tool.setuptools]
-packages = ["anonfaces"]
+packages = ["anonfaces", "anonfaces.main", "anonfaces.gui", "anonfaces.helper"]
 
 [tool.setuptools.package-data]
 anonfaces = [
     "centerface.onnx",
-    "shape_predictor_5_face_landmarks.dat",
-    "dlib_face_recognition_resnet_model_v1.dat",
 	"face_db.sqlite"
 ]
 

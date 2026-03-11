@@ -627,7 +627,7 @@ Windows example in GUI {"fps": 10, "bitrate": "1000k"}."""
  
  
     def facedbgui_launch(self):
-        cmd = ["anonfaces", "--face-gui"]
+        cmd = [sys.executable, "-m", "anonfaces", "--face-gui"]
         subprocess.run(cmd)
         
 

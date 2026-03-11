@@ -20,7 +20,6 @@ from tqdm import tqdm
 import tkinter as tk
 import sqlite3
 import re
-from scipy.spatial import distance
 from tkinter import Tk
 from tkinter.filedialog import askdirectory
 
@@ -28,6 +27,7 @@ from tkinter.filedialog import askdirectory
 try:
     from anonfaces import __version__
     from anonfaces.main.centerface import CenterFace
+    from anonfaces.main.arcface import ArcFaceONNX, align_face
     from anonfaces.gui.dbfacegui import FaceDatabaseApp
 except (ModuleNotFoundError, ImportError):
     # Standalone mode - running directly from the package directory
@@ -36,6 +36,7 @@ except (ModuleNotFoundError, ImportError):
         sys.path.insert(0, _pkg_dir)
     from __init__ import __version__
     from main.centerface import CenterFace
+    from main.arcface import ArcFaceONNX, align_face
     from gui.dbfacegui import FaceDatabaseApp
 
 
@@ -136,41 +137,25 @@ def draw_det(
         )
 
 
-def load_dlib_params():
-    #dlib face detector and face recognition models
-
-    shape_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        'database',
-        'shape_predictor_5_face_landmarks.dat'
-        )
-
-    face_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        'database',
-        'dlib_face_recognition_resnet_model_v1.dat'
-        )
-    import dlib
-    detector = dlib.get_frontal_face_detector()
-    sp = dlib.shape_predictor(shape_path)
-    facerec = dlib.face_recognition_model_v1(face_path)
-    return detector, sp, facerec
-
-
 #leaving here to fallback to directory loading faces
-def load_reference_faces(reference_directory, detector, sp, facerec):
+def load_reference_faces(reference_directory, centerface, arcface):
     reference_descriptors = []
     reference_names = []
     for file_name in os.listdir(reference_directory):
-        if file_name.endswith(('.jpg', '.jpeg', '.png')): #only tested with these formats. others might work
+        if file_name.endswith(('.jpg', '.jpeg', '.png')):
             img_path = os.path.join(reference_directory, file_name)
-            img = dlib.load_rgb_image(img_path)
-            dets = detector(img, 1)#reduce the number of scales to speed up detection? 1 default here
+            img = cv2.imread(img_path)
+            if img is None:
+                tqdm.write(f"Could not open {img_path}")
+                continue
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            dets, lms = centerface(img_rgb, threshold=0.2)
 
             if len(dets) > 0:
-                shape = sp(img, dets[0])
-                face_descriptor = facerec.compute_face_descriptor(img, shape)
-                reference_descriptors.append(np.array(face_descriptor))
+                landmarks = lms[0].reshape(5, 2)
+                aligned = align_face(img_rgb, landmarks)
+                embedding = arcface.get_embedding(aligned)
+                reference_descriptors.append(embedding)
                 # Clean up the name by removing numbers and file extensions so we can have multiple images John_Doe1.jpg
                 cleaned_name = re.sub(r'\d+', '', os.path.splitext(file_name)[0])
                 cleaned_name = cleaned_name.replace('_', ' ').title()
@@ -181,31 +166,26 @@ def load_reference_faces(reference_directory, detector, sp, facerec):
     return reference_descriptors, reference_names
 
 
-# check if a detected face matches any reference face
-def is_known_face(face_descriptor, reference_face_descriptors, reference_names, reference_image_ids, threshold):
+# check if a detected face matches any reference face (cosine similarity, higher = more similar)
+def is_known_face(face_embedding, reference_face_descriptors, reference_names, reference_image_ids, threshold):
     for ref_descriptor, ref_name, ref_id in zip(reference_face_descriptors, reference_names, reference_image_ids):
-    #for ref_descriptor in reference_face_descriptors:
-        
-        #uncomment to verify multiple image checks per person via image id in sql.
-        #print(f"Checking against: {ref_name} - {ref_id}")
-        dist = distance.euclidean(face_descriptor, ref_descriptor)
-        if dist < threshold:
+        similarity = float(np.dot(face_embedding, ref_descriptor))
+        if similarity > threshold:
             return ref_name
     return None
 
 
-def load_reference_faces_from_db(database_path, detector, sp, facerec):
+def load_reference_faces_from_db(database_path, centerface, arcface):
     conn = sqlite3.connect(database_path)
     cursor = conn.cursor()
-    #print(f"Database path: {database_path}")
 
     # get all persons and their associated images
     cursor.execute('''
-        SELECT images.id, persons.name, images.image 
-        FROM persons 
+        SELECT images.id, persons.name, images.image
+        FROM persons
         JOIN images ON persons.id = images.person_id
     ''')
-    
+
     reference_descriptors = []
     reference_names = []
     reference_image_ids = []
@@ -214,13 +194,15 @@ def load_reference_faces_from_db(database_path, detector, sp, facerec):
         # convert sql BLOB back to an image
         img = np.frombuffer(image_blob, dtype=np.uint8)
         img = cv2.imdecode(img, cv2.IMREAD_COLOR)
-        
-        # process the image using dlib
-        dets = detector(img, 1)
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # detect face with CenterFace and compute ArcFace embedding
+        dets, lms = centerface(img_rgb, threshold=0.2)
         if len(dets) > 0:
-            shape = sp(img, dets[0])
-            face_descriptor = facerec.compute_face_descriptor(img, shape)
-            reference_descriptors.append(np.array(face_descriptor))
+            landmarks = lms[0].reshape(5, 2)
+            aligned = align_face(img_rgb, landmarks)
+            embedding = arcface.get_embedding(aligned)
+            reference_descriptors.append(embedding)
             # first letter of first and last capitalized, remove all numbers
             cleaned_name = ' '.join([part.capitalize() for part in ''.join([i for i in name if not i.isdigit()]).split()])
             reference_names.append(cleaned_name)
@@ -235,8 +217,8 @@ def load_reference_faces_from_db(database_path, detector, sp, facerec):
 def anonymize_frame(
         dets, frame, mask_scale,
         replacewith, ellipse, draw_scores, replaceimg, mosaicsize,
-        face_recog, fr_name, detector, sp, facerec,
-        reference_face_descriptors=None, reference_names=None, reference_image_ids=None, fr_thresh=0.60,
+        face_recog, fr_name, arcface=None, landmarks=None,
+        reference_face_descriptors=None, reference_names=None, reference_image_ids=None, fr_thresh=0.45,
 ):
     for i, det in enumerate(dets):
         boxes, score = det[:4], det[4]
@@ -245,33 +227,22 @@ def anonymize_frame(
         y1, y2 = max(0, y1), min(frame.shape[0] - 1, y2)
         x1, x2 = max(0, x1), min(frame.shape[1] - 1, x2)
 
-        if face_recog and reference_face_descriptors:
-            # Extract face and create an embedding - Now only done if face recog is on
-            face = frame[y1:y2, x1:x2]
-            face_rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
-            #face_rgb = cv2.resize(face_rgb, (128, 128))  # option to resize for faster times and still match - testing on an off locally
-            dlib_dets = detector(face_rgb, 1)#reduce the number of scales to speed up detection? 1 default here
+        if face_recog and reference_face_descriptors and arcface is not None and landmarks is not None:
+            # Use CenterFace landmarks + ArcFace for recognition (no redundant detection)
+            face_lms = landmarks[i].reshape(5, 2)
+            aligned = align_face(frame, face_lms)
+            face_embedding = arcface.get_embedding(aligned)
 
-            if len(dlib_dets) > 0:
-                shape = sp(face_rgb, dlib_dets[0])
-                face_descriptor = facerec.compute_face_descriptor(face_rgb, shape)
-                face_descriptor = np.array(face_descriptor)
+            # Check if the detected face is a known reference face
+            matched_name = is_known_face(face_embedding, reference_face_descriptors, reference_names, reference_image_ids, threshold=fr_thresh)
+            if matched_name:
+                if fr_name:
+                    text_size = cv2.getTextSize(matched_name, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+                    text_x = x1 + (x2 - x1 - text_size[0]) // 2
+                    text_y = y1 + text_size[1]
+                    cv2.putText(frame, matched_name, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36, 255, 12), 2)
 
-                if face_descriptor.ndim != 1:
-                    face_descriptor = face_descriptor.flatten()#seems slower with no benefit yet - info below
-                    # uncomment to see what dimension the array is in.
-                    #tqdm.write(f'face_descriptor.ndim: {face_descriptor.ndim}')
-                
-                # Check if the detected face is a known reference face
-                matched_name = is_known_face(face_descriptor, reference_face_descriptors, reference_names, reference_image_ids, threshold=fr_thresh)
-                if matched_name:
-                    if fr_name:
-                        text_size = cv2.getTextSize(matched_name, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
-                        text_x = x1 + (x2 - x1 - text_size[0]) // 2
-                        text_y = y1 + text_size[1]
-                        cv2.putText(frame, matched_name, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (36, 255, 12), 2)
-
-                    continue  # Hopefully skip blurring for known faces
+                continue  # Skip blurring for known faces
 
         draw_det(
             frame, score, i, x1, y1, x2, y2,
@@ -309,7 +280,7 @@ def video_detect(
         reference_image_ids=None,
         fr_thresh=0.60,
         fr_name: bool = False,
-        detector=None, sp=None, facerec=None
+        arcface=None
 ):
     try:
         # Handle camera device identifiers for OpenCV
@@ -480,19 +451,18 @@ def video_detect(
         # Convert BGR to RGB (OpenCV reads BGR, CenterFace expects RGB)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Perform network inference, get bb dets but discard landmark predictions
-        dets, _ = centerface(frame, threshold=threshold)
+        # Perform network inference, get bb dets and landmark predictions
+        dets, lms = centerface(frame, threshold=threshold)
 
         anonymize_frame(
             dets, frame, mask_scale=mask_scale,
             replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
             replaceimg=replaceimg, mosaicsize=mosaicsize,
-            #new below
-            face_recog=face_recog,
+            face_recog=face_recog, fr_name=fr_name,
+            arcface=arcface, landmarks=lms,
             reference_face_descriptors=reference_face_descriptors,
             reference_names=reference_names, fr_thresh=fr_thresh,
-            fr_name=fr_name, reference_image_ids=reference_image_ids,
-            detector=detector, sp=sp, facerec=facerec
+            reference_image_ids=reference_image_ids,
         )
 
         if opath is not None and process is not None:
@@ -593,7 +563,7 @@ def image_detect(
         reference_image_ids=None,
         fr_thresh=0.60,
         fr_name: bool = False,
-        detector=None, sp=None, facerec=None
+        arcface=None
 ):
     frame_bgr = cv2.imread(ipath)
     if frame_bgr is None:
@@ -608,19 +578,18 @@ def image_detect(
         pil_img = PILImage.open(ipath)
         exif_data = pil_img.info.get('exif', None)
 
-    # Perform network inference, get bb dets but discard landmark predictions
-    dets, _ = centerface(frame, threshold=threshold)
+    # Perform network inference, get bb dets and landmark predictions
+    dets, lms = centerface(frame, threshold=threshold)
 
     anonymize_frame(
         dets, frame, mask_scale=mask_scale,
         replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
         replaceimg=replaceimg, mosaicsize=mosaicsize,
-        #new below
-        face_recog=face_recog,
+        face_recog=face_recog, fr_name=fr_name,
+        arcface=arcface, landmarks=lms,
         reference_face_descriptors=reference_face_descriptors,
         reference_names=reference_names, fr_thresh=fr_thresh,
-        fr_name=fr_name, reference_image_ids=reference_image_ids,
-        detector=detector, sp=sp, facerec=facerec
+        reference_image_ids=reference_image_ids,
     )
 
     if enable_preview:
@@ -668,14 +637,14 @@ def get_anonymized_image(frame,
     """
 
     centerface = CenterFace(in_shape=None, backend='auto')
-    dets, _ = centerface(frame, threshold=threshold)
+    dets, lms = centerface(frame, threshold=threshold)
 
     anonymize_frame(
         dets, frame, mask_scale=mask_scale,
         replacewith=replacewith, ellipse=ellipse, draw_scores=draw_scores,
         replaceimg=replaceimg, mosaicsize=mosaicsize,
         face_recog=False, fr_name=False,
-        detector=None, sp=None, facerec=None
+        arcface=None, landmarks=lms
     )
 
     return frame
@@ -729,8 +698,8 @@ def parse_cli_args():
         '--frn', '-frn', action='store_true', default=False,
         help="Enable both face recognition and name labeling from image names.")
     parser.add_argument(
-        '--fr-thresh', '-ft', type=float, default=0.60,
-        help="Set the face recognition threshold. Default is 0.60 here and seems standard. More testing needed")
+        '--fr-thresh', '-ft', type=float, default=0.45,
+        help="Set the face recognition cosine similarity threshold (higher = stricter). Default: 0.45")
     parser.add_argument(
         '--distort-audio', '-da', default=False, action='store_true',
         help='Enable audio distortion for the output video (applies pitch shift and gain effects to the audio). This automatically applies --keep-audio but will not work with --copy-acodec due to MoviePy')
@@ -742,7 +711,7 @@ def parse_cli_args():
         help='Keep audio codec from video source file.')
     parser.add_argument(
         '--ffmpeg-config', default={"codec": "libx264"}, type=json.loads,
-        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg-imageio docs. Default: \'{"codec": "libx264"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10, \\"bitrate\\": \\"1000k\\"}"')  # See https://imageio.readthedocs.io/en/stable/format_ffmpeg.html#parameters-for-saving
+        help='FFMPEG config arguments for encoding output videos. This argument is expected in JSON notation. For a list of possible options, refer to the ffmpeg docs. Default: \'{"codec": "libx264"}\'.  Windows example --ffmpeg-config "{\\"fps\\": 10, \\"bitrate\\": \\"1000k\\"}"')
     parser.add_argument(
         '--backend', default='auto', choices=['auto', 'onnxrt', 'opencv'],
         help='Backend for ONNX model execution. Default: "auto" (prefer onnxrt if available).')
@@ -820,22 +789,6 @@ def main():
     args = parse_cli_args()
     ipaths = []
     
-    # Directory only shows if face recog arg = on
-    if args.face_recog:
-        detector, sp, facerec = load_dlib_params()
-        database_path = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            'database',
-            'face_db.sqlite'
-        )
-        reference_face_descriptors, reference_names, reference_image_ids = load_reference_faces_from_db(database_path, detector, sp, facerec)
-        #uncomment for local directory reference faces-leaving in here for a fallback later
-        #will keep both but figure out the best way to handle the option.....
-        #reference_directory = select_reference_directory()
-        #reference_face_descriptors, reference_names = load_reference_faces(reference_directory)
-    else:
-        reference_face_descriptors, reference_names, reference_image_ids = [], [], []
-    
     # add files in folders
     for path in args.input:
         if os.path.isdir(path):
@@ -886,6 +839,19 @@ def main():
     # TODO: scalar downscaling setting (-> in_shape), preserving aspect ratio
     centerface = CenterFace(in_shape=in_shape, backend=backend, override_execution_provider=execution_provider)
 
+    # Load ArcFace and reference faces if face recognition is enabled
+    arcface_model = None
+    if args.face_recog:
+        arcface_model = ArcFaceONNX(backend=backend, override_execution_provider=execution_provider)
+        database_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'database',
+            'face_db.sqlite'
+        )
+        reference_face_descriptors, reference_names, reference_image_ids = load_reference_faces_from_db(database_path, centerface, arcface_model)
+    else:
+        reference_face_descriptors, reference_names, reference_image_ids = [], [], []
+
     multi_file = len(ipaths) > 1
     if multi_file:
         ipaths = tqdm(ipaths, position=0, dynamic_ncols=True, desc='Batch progress', leave=True)
@@ -924,18 +890,15 @@ def main():
                 ffmpeg_config=ffmpeg_config,
                 replaceimg=replaceimg,
                 mosaicsize=mosaicsize,
-                #new below
                 copy_acodec=copy_acodec,
                 info=info,
                 fr_thresh=args.fr_thresh,
-                face_recog=args.face_recog,  # Pass the face recog argument
-                reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
-                reference_names=reference_names if args.face_recog else None,  # Pass reference names
-                reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
+                face_recog=args.face_recog,
+                reference_face_descriptors=reference_face_descriptors if args.face_recog else None,
+                reference_names=reference_names if args.face_recog else None,
+                reference_image_ids=reference_image_ids if args.face_recog else None,
                 fr_name=args.fr_name,
-                detector=detector if args.face_recog else None,
-                sp=sp if args.face_recog else None,
-                facerec=facerec if args.face_recog else None
+                arcface=arcface_model if args.face_recog else None
             )
             if stop_ffmpeg:
                 break  # exit the loop immediately if signal is received - second loop
@@ -964,16 +927,13 @@ def main():
                     keep_metadata=keep_metadata,
                     replaceimg=replaceimg,
                     mosaicsize=mosaicsize,
-                    #new below
                     fr_thresh=args.fr_thresh,
-                    face_recog=args.face_recog,  # Pass the face recog argument
-                    reference_face_descriptors=reference_face_descriptors if args.face_recog else None,  # Pass reference descriptors if face recog = on
-                    reference_names=reference_names if args.face_recog else None,  # Pass reference names
-                    reference_image_ids=reference_image_ids if args.face_recog else None, #Pass the ids for testing - should not slow anything down.
-                    fr_name= args.fr_name,
-                    detector=detector if args.face_recog else None,
-                    sp=sp if args.face_recog else None,
-                    facerec=facerec if args.face_recog else None
+                    face_recog=args.face_recog,
+                    reference_face_descriptors=reference_face_descriptors if args.face_recog else None,
+                    reference_names=reference_names if args.face_recog else None,
+                    reference_image_ids=reference_image_ids if args.face_recog else None,
+                    fr_name=args.fr_name,
+                    arcface=arcface_model if args.face_recog else None
                 )
             else:
                 tqdm.write(f'File {ipath} has an unsupported image format {ext}. Skipping...')

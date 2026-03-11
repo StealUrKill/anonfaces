@@ -3,3 +3,5 @@
 /anonfaces/main/__pycache__
 /anonfaces/helper/__pycache__
 /.claude
+anonfaces/database/face_db.sqlite
+anonfaces/database/w600k_r50.onnx
